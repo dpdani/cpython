@@ -232,6 +232,8 @@ equally good collision statistics, needed less code & used less memory.
 
 */
 
+#include "dictmetrics.h"
+
 static int dictresize(PyDictObject *mp, uint8_t log_newsize, int unicode);
 
 static PyObject* dict_iter(PyDictObject *dict);
@@ -257,6 +259,9 @@ get_dict_state(void)
 void
 _PyDict_ClearFreeList(PyInterpreterState *interp)
 {
+    dict_metrics[2].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
 #if PyDict_MAXFREELIST > 0
     struct _Py_dict_state *state = &interp->dict_state;
     while (state->numfree) {
@@ -268,36 +273,50 @@ _PyDict_ClearFreeList(PyInterpreterState *interp)
         PyObject_Free(state->keys_free_list[--state->keys_numfree]);
     }
 #endif
+    dict_metrics[2].total_time += elapsed(start);
 }
 
 
 void
 _PyDict_Fini(PyInterpreterState *interp)
 {
+    dict_metrics[3].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     _PyDict_ClearFreeList(interp);
 #if defined(Py_DEBUG) && PyDict_MAXFREELIST > 0
     struct _Py_dict_state *state = &interp->dict_state;
     state->numfree = -1;
     state->keys_numfree = -1;
 #endif
+    dict_metrics[3].total_time += elapsed(start);
 }
 
 static inline Py_hash_t
 unicode_get_hash(PyObject *o)
 {
+    dict_metrics[4].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(PyUnicode_CheckExact(o));
-    return _PyASCIIObject_CAST(o)->hash;
+    Py_hash_t ret = _PyASCIIObject_CAST(o)->hash;
+    dict_metrics[4].total_time += elapsed(start);
+    return ret;
 }
 
 /* Print summary info about the state of the optimized allocator */
 void
 _PyDict_DebugMallocStats(FILE *out)
 {
+    dict_metrics[5].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
 #if PyDict_MAXFREELIST > 0
     struct _Py_dict_state *state = get_dict_state();
     _PyDebugAllocatorStats(out, "free PyDictObject",
                            state->numfree, sizeof(PyDictObject));
 #endif
+    dict_metrics[5].total_time += elapsed(start);
 }
 
 #define DK_MASK(dk) (DK_SIZE(dk)-1)
@@ -307,15 +326,22 @@ static void free_keys_object(PyDictKeysObject *keys);
 static inline void
 dictkeys_incref(PyDictKeysObject *dk)
 {
+    dict_metrics[7].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
 #ifdef Py_REF_DEBUG
     _Py_RefTotal++;
 #endif
     dk->dk_refcnt++;
+    dict_metrics[7].total_time += elapsed(start);
 }
 
 static inline void
 dictkeys_decref(PyDictKeysObject *dk)
 {
+    dict_metrics[8].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(dk->dk_refcnt > 0);
 #ifdef Py_REF_DEBUG
     _Py_RefTotal--;
@@ -323,12 +349,16 @@ dictkeys_decref(PyDictKeysObject *dk)
     if (--dk->dk_refcnt == 0) {
         free_keys_object(dk);
     }
+    dict_metrics[8].total_time += elapsed(start);
 }
 
 /* lookup indices.  returns DKIX_EMPTY, DKIX_DUMMY, or ix >=0 */
 static inline Py_ssize_t
 dictkeys_get_index(const PyDictKeysObject *keys, Py_ssize_t i)
 {
+    dict_metrics[9].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     int log2size = DK_LOG_SIZE(keys);
     Py_ssize_t ix;
 
@@ -351,6 +381,12 @@ dictkeys_get_index(const PyDictKeysObject *keys, Py_ssize_t i)
         ix = indices[i];
     }
     assert(ix >= DKIX_DUMMY);
+    dict_metrics[9].total_time += elapsed(start);
+    if (ix != DKIX_EMPTY && ix != DKIX_DUMMY) {
+        dict_metrics[9].extra_1++;
+    } else {
+        dict_metrics[9].extra_2++;
+    }
     return ix;
 }
 
@@ -358,6 +394,9 @@ dictkeys_get_index(const PyDictKeysObject *keys, Py_ssize_t i)
 static inline void
 dictkeys_set_index(PyDictKeysObject *keys, Py_ssize_t i, Py_ssize_t ix)
 {
+    dict_metrics[10].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     int log2size = DK_LOG_SIZE(keys);
 
     assert(ix >= DKIX_DUMMY);
@@ -384,6 +423,7 @@ dictkeys_set_index(PyDictKeysObject *keys, Py_ssize_t i, Py_ssize_t ix)
         assert(ix <= 0x7fffffff);
         indices[i] = (int32_t)ix;
     }
+    dict_metrics[10].total_time += elapsed(start);
 }
 
 
@@ -404,14 +444,30 @@ dictkeys_set_index(PyDictKeysObject *keys, Py_ssize_t i, Py_ssize_t ix)
 static inline uint8_t
 calculate_log2_keysize(Py_ssize_t minsize)
 {
+    dict_metrics[11].usages++;
+    int the_size;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
 #if SIZEOF_LONG == SIZEOF_SIZE_T
     minsize = (minsize | PyDict_MINSIZE) - 1;
+    dict_metrics[11].total_time += elapsed(start);
+    the_size = _Py_bit_length(minsize | (PyDict_MINSIZE-1));
+    if (dict_metrics[11].usages == 1) {
+        dict_metrics[11].extra_1 = the_size;
+    }
+    dict_metrics[11].extra_1 = (dict_metrics[11].extra_1 + the_size) / 2;
     return _Py_bit_length(minsize | (PyDict_MINSIZE-1));
 #elif defined(_MSC_VER)
     // On 64bit Windows, sizeof(long) == 4.
     minsize = (minsize | PyDict_MINSIZE) - 1;
     unsigned long msb;
     _BitScanReverse64(&msb, (uint64_t)minsize);
+    dict_metrics[11].total_time += elapsed(start);
+    the_size = (uint8_t)(msb + 1);
+    if (dict_metrics[11].usages == 1) {
+        dict_metrics[11].extra_1 = the_size;
+    }
+    dict_metrics[11].extra_1 = (dict_metrics[11].extra_1 + the_size) / 2;
     return (uint8_t)(msb + 1);
 #else
     uint8_t log2_size;
@@ -419,6 +475,12 @@ calculate_log2_keysize(Py_ssize_t minsize)
             (((Py_ssize_t)1) << log2_size) < minsize;
             log2_size++)
         ;
+    dict_metrics[11].total_time += elapsed(start);
+    the_size = log2_size;
+    if (dict_metrics[11].usages == 1) {
+        dict_metrics[11].extra_1 = the_size;
+    }
+    dict_metrics[11].extra_1 = (dict_metrics[11].extra_1 + the_size) / 2;
     return log2_size;
 #endif
 }
@@ -431,7 +493,16 @@ calculate_log2_keysize(Py_ssize_t minsize)
 static inline uint8_t
 estimate_log2_keysize(Py_ssize_t n)
 {
-    return calculate_log2_keysize((n*3 + 1) / 2);
+    dict_metrics[12].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    int the_size = calculate_log2_keysize((n*3 + 1) / 2);
+    dict_metrics[12].total_time += elapsed(start);
+    if (dict_metrics[12].usages == 1) {
+        dict_metrics[12].extra_1 = the_size;
+    }
+    dict_metrics[12].extra_1 = (dict_metrics[12].extra_1 + the_size) / 2;
+    return the_size;
 }
 
 
@@ -476,8 +547,12 @@ static PyDictKeysObject empty_keys_struct = {
 static inline int
 get_index_from_order(PyDictObject *mp, Py_ssize_t i)
 {
+    dict_metrics[13].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(mp->ma_used <= SHARED_KEYS_MAX_SIZE);
     assert(i < (((char *)mp->ma_values)[-2]));
+    dict_metrics[13].total_time += elapsed(start);
     return ((char *)mp->ma_values)[-3-i];
 }
 
@@ -501,6 +576,9 @@ dump_entries(PyDictKeysObject *dk)
 int
 _PyDict_CheckConsistency(PyObject *op, int check_content)
 {
+    dict_metrics[14].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
 #define CHECK(expr) \
     do { if (!(expr)) { _PyObject_ASSERT_FAILED_MSG(op, Py_STRINGIFY(expr)); } } while (0)
 
@@ -584,6 +662,7 @@ _PyDict_CheckConsistency(PyObject *op, int check_content)
             }
         }
     }
+    dict_metrics[14].total_time += elapsed(start);
     return 1;
 
 #undef CHECK
@@ -593,6 +672,9 @@ _PyDict_CheckConsistency(PyObject *op, int check_content)
 static PyDictKeysObject*
 new_keys_object(uint8_t log2_size, bool unicode)
 {
+    dict_metrics[15].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictKeysObject *dk;
     Py_ssize_t usable;
     int log2_bytes;
@@ -634,6 +716,7 @@ new_keys_object(uint8_t log2_size, bool unicode)
                              + entry_size * usable);
         if (dk == NULL) {
             PyErr_NoMemory();
+            dict_metrics[15].total_time += elapsed(start);
             return NULL;
         }
     }
@@ -649,12 +732,16 @@ new_keys_object(uint8_t log2_size, bool unicode)
     dk->dk_version = 0;
     memset(&dk->dk_indices[0], 0xff, ((size_t)1 << log2_bytes));
     memset(&dk->dk_indices[(size_t)1 << log2_bytes], 0, entry_size * usable);
+    dict_metrics[15].total_time += elapsed(start);
     return dk;
 }
 
 static void
 free_keys_object(PyDictKeysObject *keys)
 {
+    dict_metrics[6].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(keys != Py_EMPTY_KEYS);
     if (DK_IS_UNICODE(keys)) {
         PyDictUnicodeEntry *entries = DK_UNICODE_ENTRIES(keys);
@@ -683,39 +770,53 @@ free_keys_object(PyDictKeysObject *keys)
             && DK_IS_UNICODE(keys)) {
         state->keys_free_list[state->keys_numfree++] = keys;
         OBJECT_STAT_INC(to_freelist);
+        dict_metrics[6].total_time += elapsed(start);
         return;
     }
 #endif
+    dict_metrics[6].total_time += elapsed(start);
     PyObject_Free(keys);
 }
 
 static inline PyDictValues*
 new_values(Py_ssize_t size)
 {
+    dict_metrics[16].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(size > 0);
     size_t prefix_size = _Py_SIZE_ROUND_UP(size+2, sizeof(PyObject *));
     assert(prefix_size < 256);
     size_t n = prefix_size + size * sizeof(PyObject *);
     uint8_t *mem = PyMem_Malloc(n);
     if (mem == NULL) {
+        dict_metrics[16].total_time += elapsed(start);
         return NULL;
     }
     assert(prefix_size % sizeof(PyObject *) == 0);
     mem[prefix_size-1] = (uint8_t)prefix_size;
+    dict_metrics[16].total_time += elapsed(start);
     return (PyDictValues*)(mem + prefix_size);
 }
 
 static inline void
 free_values(PyDictValues *values)
 {
+    dict_metrics[17].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     int prefix_size = ((uint8_t *)values)[-1];
     PyMem_Free(((char *)values)-prefix_size);
+    dict_metrics[17].total_time += elapsed(start);
 }
 
 /* Consumes a reference to the keys object */
 static PyObject *
 new_dict(PyDictKeysObject *keys, PyDictValues *values, Py_ssize_t used, int free_values_on_failure)
 {
+    dict_metrics[18].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictObject *mp;
     assert(keys != NULL);
 #if PyDict_MAXFREELIST > 0
@@ -740,6 +841,7 @@ new_dict(PyDictKeysObject *keys, PyDictValues *values, Py_ssize_t used, int free
             if (free_values_on_failure) {
                 free_values(values);
             }
+            dict_metrics[18].total_time += elapsed(start);
             return NULL;
         }
     }
@@ -748,19 +850,32 @@ new_dict(PyDictKeysObject *keys, PyDictValues *values, Py_ssize_t used, int free
     mp->ma_used = used;
     mp->ma_version_tag = DICT_NEXT_VERSION();
     ASSERT_CONSISTENT(mp);
+    dict_metrics[18].total_time += elapsed(start);
     return (PyObject *)mp;
 }
 
 static inline Py_ssize_t
 shared_keys_usable_size(PyDictKeysObject *keys)
 {
-    return keys->dk_nentries + keys->dk_usable;
+    dict_metrics[19].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    dict_metrics[19].total_time += elapsed(start);
+    Py_ssize_t the_size = keys->dk_nentries + keys->dk_usable;
+    if (dict_metrics[19].usages == 1) {
+        dict_metrics[19].extra_1 = the_size;
+    }
+    dict_metrics[19].extra_1 = (dict_metrics[19].extra_1 + the_size) / 2;
+    return the_size;
 }
 
 /* Consumes a reference to the keys object */
 static PyObject *
 new_dict_with_shared_keys(PyDictKeysObject *keys)
 {
+    dict_metrics[20].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictValues *values;
     Py_ssize_t i, size;
 
@@ -774,6 +889,7 @@ new_dict_with_shared_keys(PyDictKeysObject *keys)
     for (i = 0; i < size; i++) {
         values->values[i] = NULL;
     }
+    dict_metrics[20].total_time += elapsed(start);
     return new_dict(keys, values, 0, 1);
 }
 
@@ -781,6 +897,9 @@ new_dict_with_shared_keys(PyDictKeysObject *keys)
 static PyDictKeysObject *
 clone_combined_dict_keys(PyDictObject *orig)
 {
+    dict_metrics[21].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(PyDict_Check(orig));
     assert(Py_TYPE(orig)->tp_iter == (getiterfunc)dict_iter);
     assert(orig->ma_values == NULL);
@@ -831,13 +950,18 @@ clone_combined_dict_keys(PyDictObject *orig)
 #ifdef Py_REF_DEBUG
     _Py_RefTotal++;
 #endif
+    dict_metrics[21].total_time += elapsed(start);
     return keys;
 }
 
 PyObject *
 PyDict_New(void)
 {
+    dict_metrics[22].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     dictkeys_incref(Py_EMPTY_KEYS);
+    dict_metrics[22].total_time += elapsed(start);
     return new_dict(Py_EMPTY_KEYS, NULL, 0, 0);
 }
 
@@ -845,6 +969,9 @@ PyDict_New(void)
 static Py_ssize_t
 lookdict_index(PyDictKeysObject *k, Py_hash_t hash, Py_ssize_t index)
 {
+    dict_metrics[23].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     size_t mask = DK_MASK(k);
     size_t perturb = (size_t)hash;
     size_t i = (size_t)hash & mask;
@@ -852,9 +979,11 @@ lookdict_index(PyDictKeysObject *k, Py_hash_t hash, Py_ssize_t index)
     for (;;) {
         Py_ssize_t ix = dictkeys_get_index(k, i);
         if (ix == index) {
+            dict_metrics[23].total_time += elapsed(start);
             return i;
         }
         if (ix == DKIX_EMPTY) {
+            dict_metrics[23].total_time += elapsed(start);
             return DKIX_EMPTY;
         }
         perturb >>= PERTURB_SHIFT;
@@ -867,6 +996,9 @@ lookdict_index(PyDictKeysObject *k, Py_hash_t hash, Py_ssize_t index)
 static Py_ssize_t
 unicodekeys_lookup_generic(PyDictObject *mp, PyDictKeysObject* dk, PyObject *key, Py_hash_t hash)
 {
+    dict_metrics[24].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictUnicodeEntry *ep0 = DK_UNICODE_ENTRIES(dk);
     size_t mask = DK_MASK(dk);
     size_t perturb = hash;
@@ -879,6 +1011,8 @@ unicodekeys_lookup_generic(PyDictObject *mp, PyDictKeysObject* dk, PyObject *key
             assert(ep->me_key != NULL);
             assert(PyUnicode_CheckExact(ep->me_key));
             if (ep->me_key == key) {
+                dict_metrics[24].total_time += elapsed(start);
+                dict_metrics[24].extra_1 += 1;
                 return ix;
             }
             if (unicode_get_hash(ep->me_key) == hash) {
@@ -887,25 +1021,35 @@ unicodekeys_lookup_generic(PyDictObject *mp, PyDictKeysObject* dk, PyObject *key
                 int cmp = PyObject_RichCompareBool(startkey, key, Py_EQ);
                 Py_DECREF(startkey);
                 if (cmp < 0) {
+                    dict_metrics[24].total_time += elapsed(start);
+                    dict_metrics[24].extra_2 += 1;
                     return DKIX_ERROR;
                 }
                 if (dk == mp->ma_keys && ep->me_key == startkey) {
                     if (cmp > 0) {
+                        dict_metrics[24].total_time += elapsed(start);
+                        dict_metrics[24].extra_1 += 1;
                         return ix;
                     }
                 }
                 else {
                     /* The dict was mutated, restart */
+                    dict_metrics[24].total_time += elapsed(start);
+                    dict_metrics[24].extra_2 += 1;
                     return DKIX_KEY_CHANGED;
                 }
             }
         }
         else if (ix == DKIX_EMPTY) {
+            dict_metrics[24].total_time += elapsed(start);
+            dict_metrics[24].extra_2 += 1;
             return DKIX_EMPTY;
         }
         perturb >>= PERTURB_SHIFT;
         i = mask & (i*5 + perturb + 1);
     }
+    dict_metrics[24].total_time += elapsed(start);
+    dict_metrics[24].extra_2 += 1;
     Py_UNREACHABLE();
 }
 
@@ -913,6 +1057,9 @@ unicodekeys_lookup_generic(PyDictObject *mp, PyDictKeysObject* dk, PyObject *key
 static Py_ssize_t _Py_HOT_FUNCTION
 unicodekeys_lookup_unicode(PyDictKeysObject* dk, PyObject *key, Py_hash_t hash)
 {
+    dict_metrics[25].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictUnicodeEntry *ep0 = DK_UNICODE_ENTRIES(dk);
     size_t mask = DK_MASK(dk);
     size_t perturb = hash;
@@ -926,10 +1073,14 @@ unicodekeys_lookup_unicode(PyDictKeysObject* dk, PyObject *key, Py_hash_t hash)
             assert(PyUnicode_CheckExact(ep->me_key));
             if (ep->me_key == key ||
                     (unicode_get_hash(ep->me_key) == hash && unicode_eq(ep->me_key, key))) {
+                dict_metrics[25].total_time += elapsed(start);
+                dict_metrics[25].extra_1 += 1;
                 return ix;
             }
         }
         else if (ix == DKIX_EMPTY) {
+            dict_metrics[25].total_time += elapsed(start);
+            dict_metrics[25].extra_2 += 1;
             return DKIX_EMPTY;
         }
         perturb >>= PERTURB_SHIFT;
@@ -941,10 +1092,14 @@ unicodekeys_lookup_unicode(PyDictKeysObject* dk, PyObject *key, Py_hash_t hash)
             assert(PyUnicode_CheckExact(ep->me_key));
             if (ep->me_key == key ||
                     (unicode_get_hash(ep->me_key) == hash && unicode_eq(ep->me_key, key))) {
+                dict_metrics[25].total_time += elapsed(start);
+                dict_metrics[25].extra_1 += 1;
                 return ix;
             }
         }
         else if (ix == DKIX_EMPTY) {
+            dict_metrics[25].total_time += elapsed(start);
+            dict_metrics[25].extra_2 += 1;
             return DKIX_EMPTY;
         }
         perturb >>= PERTURB_SHIFT;
@@ -957,6 +1112,9 @@ unicodekeys_lookup_unicode(PyDictKeysObject* dk, PyObject *key, Py_hash_t hash)
 static Py_ssize_t
 dictkeys_generic_lookup(PyDictObject *mp, PyDictKeysObject* dk, PyObject *key, Py_hash_t hash)
 {
+    dict_metrics[26].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictKeyEntry *ep0 = DK_ENTRIES(dk);
     size_t mask = DK_MASK(dk);
     size_t perturb = hash;
@@ -968,6 +1126,8 @@ dictkeys_generic_lookup(PyDictObject *mp, PyDictKeysObject* dk, PyObject *key, P
             PyDictKeyEntry *ep = &ep0[ix];
             assert(ep->me_key != NULL);
             if (ep->me_key == key) {
+                dict_metrics[26].total_time += elapsed(start);
+                dict_metrics[26].extra_1 += 1;
                 return ix;
             }
             if (ep->me_hash == hash) {
@@ -976,20 +1136,28 @@ dictkeys_generic_lookup(PyDictObject *mp, PyDictKeysObject* dk, PyObject *key, P
                 int cmp = PyObject_RichCompareBool(startkey, key, Py_EQ);
                 Py_DECREF(startkey);
                 if (cmp < 0) {
+                    dict_metrics[26].total_time += elapsed(start);
+                    dict_metrics[26].extra_2 += 1;
                     return DKIX_ERROR;
                 }
                 if (dk == mp->ma_keys && ep->me_key == startkey) {
                     if (cmp > 0) {
+                        dict_metrics[26].total_time += elapsed(start);
+                        dict_metrics[26].extra_1 += 1;
                         return ix;
                     }
                 }
                 else {
                     /* The dict was mutated, restart */
+                    dict_metrics[26].total_time += elapsed(start);
+                    dict_metrics[26].extra_2 += 1;
                     return DKIX_KEY_CHANGED;
                 }
             }
         }
         else if (ix == DKIX_EMPTY) {
+            dict_metrics[26].total_time += elapsed(start);
+            dict_metrics[26].extra_2 += 1;
             return DKIX_EMPTY;
         }
         perturb >>= PERTURB_SHIFT;
@@ -1007,18 +1175,27 @@ dictkeys_generic_lookup(PyDictObject *mp, PyDictKeysObject* dk, PyObject *key, P
 Py_ssize_t
 _PyDictKeys_StringLookup(PyDictKeysObject* dk, PyObject *key)
 {
+    dict_metrics[27].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     DictKeysKind kind = dk->dk_kind;
     if (!PyUnicode_CheckExact(key) || kind == DICT_KEYS_GENERAL) {
+        dict_metrics[27].total_time += elapsed(start);
+        dict_metrics[27].extra_2 += 1;
         return DKIX_ERROR;
     }
     Py_hash_t hash = unicode_get_hash(key);
     if (hash == -1) {
         hash = PyUnicode_Type.tp_hash(key);
         if (hash == -1) {
+            dict_metrics[27].total_time += elapsed(start);
+            dict_metrics[27].extra_2 += 1;
             PyErr_Clear();
             return DKIX_ERROR;
         }
     }
+    dict_metrics[27].total_time += elapsed(start);
+    dict_metrics[27].extra_1 += 1;
     return unicodekeys_lookup_unicode(dk, key, hash);
 }
 
@@ -1040,6 +1217,9 @@ When the key isn't found a DKIX_EMPTY is returned.
 Py_ssize_t
 _Py_dict_lookup(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject **value_addr)
 {
+    dict_metrics[28].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictKeysObject *dk;
     DictKeysKind kind;
     Py_ssize_t ix;
@@ -1084,21 +1264,39 @@ start:
         }
     }
 
+    dict_metrics[28].total_time += elapsed(start);
+    if (value_addr != NULL && ix != DKIX_EMPTY) {
+        dict_metrics[28].extra_1 += 1;
+    } else {
+        dict_metrics[28].extra_2 += 1;
+    }
     return ix;
 }
 
 int
 _PyDict_HasOnlyStringKeys(PyObject *dict)
 {
+    dict_metrics[29].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t pos = 0;
     PyObject *key, *value;
     assert(PyDict_Check(dict));
     /* Shortcut */
-    if (((PyDictObject *)dict)->ma_keys->dk_kind != DICT_KEYS_GENERAL)
+    if (((PyDictObject *)dict)->ma_keys->dk_kind != DICT_KEYS_GENERAL) {
+        dict_metrics[29].total_time += elapsed(start);
+        dict_metrics[29].extra_1 += 1;
         return 1;
-    while (PyDict_Next(dict, &pos, &key, &value))
-        if (!PyUnicode_Check(key))
+    }
+    while (PyDict_Next(dict, &pos, &key, &value)) {
+        if (!PyUnicode_Check(key)) {
+            dict_metrics[29].total_time += elapsed(start);
+            dict_metrics[29].extra_2 += 1;
             return 0;
+        }
+    }
+    dict_metrics[29].total_time += elapsed(start);
+    dict_metrics[29].extra_1 += 1;
     return 1;
 }
 
@@ -1115,12 +1313,17 @@ _PyDict_HasOnlyStringKeys(PyObject *dict)
 void
 _PyDict_MaybeUntrack(PyObject *op)
 {
+    dict_metrics[30].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictObject *mp;
     PyObject *value;
     Py_ssize_t i, numentries;
 
-    if (!PyDict_CheckExact(op) || !_PyObject_GC_IS_TRACKED(op))
+    if (!PyDict_CheckExact(op) || !_PyObject_GC_IS_TRACKED(op)) {
+        dict_metrics[30].total_time += elapsed(start);
         return;
+    }
 
     mp = (PyDictObject *) op;
     numentries = mp->ma_keys->dk_nentries;
@@ -1129,6 +1332,7 @@ _PyDict_MaybeUntrack(PyObject *op)
             if ((value = mp->ma_values->values[i]) == NULL)
                 continue;
             if (_PyObject_GC_MAY_BE_TRACKED(value)) {
+                dict_metrics[30].total_time += elapsed(start);
                 return;
             }
         }
@@ -1139,8 +1343,10 @@ _PyDict_MaybeUntrack(PyObject *op)
             for (i = 0; i < numentries; i++) {
                 if ((value = ep0[i].me_value) == NULL)
                     continue;
-                if (_PyObject_GC_MAY_BE_TRACKED(value))
+                if (_PyObject_GC_MAY_BE_TRACKED(value)) {
+                    dict_metrics[30].total_time += elapsed(start);
                     return;
+                }
             }
         }
         else {
@@ -1149,11 +1355,15 @@ _PyDict_MaybeUntrack(PyObject *op)
                 if ((value = ep0[i].me_value) == NULL)
                     continue;
                 if (_PyObject_GC_MAY_BE_TRACKED(value) ||
-                    _PyObject_GC_MAY_BE_TRACKED(ep0[i].me_key))
+                    _PyObject_GC_MAY_BE_TRACKED(ep0[i].me_key)) {
+                    dict_metrics[30].total_time += elapsed(start);
                     return;
+                }
             }
         }
     }
+    dict_metrics[30].total_time += elapsed(start);
+    dict_metrics[30].extra_1 += 1;
     _PyObject_GC_UNTRACK(op);
 }
 
@@ -1164,6 +1374,9 @@ _PyDict_MaybeUntrack(PyObject *op)
 static Py_ssize_t
 find_empty_slot(PyDictKeysObject *keys, Py_hash_t hash)
 {
+    dict_metrics[31].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(keys != NULL);
 
     const size_t mask = DK_MASK(keys);
@@ -1174,18 +1387,27 @@ find_empty_slot(PyDictKeysObject *keys, Py_hash_t hash)
         i = (i*5 + perturb + 1) & mask;
         ix = dictkeys_get_index(keys, i);
     }
+    dict_metrics[31].total_time += elapsed(start);
     return i;
 }
 
 static int
 insertion_resize(PyDictObject *mp, int unicode)
 {
-    return dictresize(mp, calculate_log2_keysize(GROWTH_RATE(mp)), unicode);
+    dict_metrics[32].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    int ret = dictresize(mp, calculate_log2_keysize(GROWTH_RATE(mp)), unicode);
+    dict_metrics[32].total_time += elapsed(start);
+    return ret;
 }
 
 static Py_ssize_t
 insert_into_dictkeys(PyDictKeysObject *keys, PyObject *name)
 {
+    dict_metrics[33].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(PyUnicode_CheckExact(name));
     Py_hash_t hash = unicode_get_hash(name);
     if (hash == -1) {
@@ -1213,6 +1435,7 @@ insert_into_dictkeys(PyDictKeysObject *keys, PyObject *name)
         keys->dk_nentries++;
     }
     assert (ix < SHARED_KEYS_MAX_SIZE);
+    dict_metrics[33].total_time += elapsed(start);
     return ix;
 }
 
@@ -1225,6 +1448,9 @@ Consumes key and value references.
 static int
 insertdict(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject *value)
 {
+    dict_metrics[34].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *old_value;
 
     if (DK_IS_UNICODE(mp->ma_keys) && !PyUnicode_CheckExact(key)) {
@@ -1247,6 +1473,7 @@ insertdict(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject *value)
             /* Need to resize. */
             if (insertion_resize(mp, 1) < 0)
                 goto Fail;
+            dict_metrics[34].extra_3++;
         }
 
         Py_ssize_t hashpos = find_empty_slot(mp->ma_keys, hash);
@@ -1279,10 +1506,13 @@ insertdict(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject *value)
         mp->ma_keys->dk_nentries++;
         assert(mp->ma_keys->dk_usable >= 0);
         ASSERT_CONSISTENT(mp);
+        dict_metrics[34].total_time += elapsed(start);
+        dict_metrics[34].extra_1++;
         return 0;
     }
 
     if (old_value != value) {
+        dict_metrics[34].extra_2++;
         if (_PyDict_HasSplitTable(mp)) {
             mp->ma_values->values[ix] = value;
             if (old_value == NULL) {
@@ -1304,11 +1534,14 @@ insertdict(PyDictObject *mp, PyObject *key, Py_hash_t hash, PyObject *value)
     Py_XDECREF(old_value); /* which **CAN** re-enter (see issue #22653) */
     ASSERT_CONSISTENT(mp);
     Py_DECREF(key);
+    dict_metrics[34].total_time += elapsed(start);
+    dict_metrics[34].extra_1++;
     return 0;
 
 Fail:
     Py_DECREF(value);
     Py_DECREF(key);
+    dict_metrics[34].total_time += elapsed(start);
     return -1;
 }
 
@@ -1318,6 +1551,9 @@ static int
 insert_to_emptydict(PyDictObject *mp, PyObject *key, Py_hash_t hash,
                     PyObject *value)
 {
+    dict_metrics[35].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(mp->ma_keys == Py_EMPTY_KEYS);
 
     int unicode = PyUnicode_CheckExact(key);
@@ -1325,6 +1561,7 @@ insert_to_emptydict(PyDictObject *mp, PyObject *key, Py_hash_t hash,
     if (newkeys == NULL) {
         Py_DECREF(key);
         Py_DECREF(value);
+        dict_metrics[35].total_time += elapsed(start);
         return -1;
     }
     dictkeys_decref(Py_EMPTY_KEYS);
@@ -1350,6 +1587,7 @@ insert_to_emptydict(PyDictObject *mp, PyObject *key, Py_hash_t hash,
     mp->ma_version_tag = DICT_NEXT_VERSION();
     mp->ma_keys->dk_usable--;
     mp->ma_keys->dk_nentries++;
+    dict_metrics[35].total_time += elapsed(start);
     return 0;
 }
 
@@ -1359,6 +1597,9 @@ Internal routine used by dictresize() to build a hashtable of entries.
 static void
 build_indices_generic(PyDictKeysObject *keys, PyDictKeyEntry *ep, Py_ssize_t n)
 {
+    dict_metrics[36].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     size_t mask = DK_MASK(keys);
     for (Py_ssize_t ix = 0; ix != n; ix++, ep++) {
         Py_hash_t hash = ep->me_hash;
@@ -1369,11 +1610,15 @@ build_indices_generic(PyDictKeysObject *keys, PyDictKeyEntry *ep, Py_ssize_t n)
         }
         dictkeys_set_index(keys, i, ix);
     }
+    dict_metrics[36].total_time += elapsed(start);
 }
 
 static void
 build_indices_unicode(PyDictKeysObject *keys, PyDictUnicodeEntry *ep, Py_ssize_t n)
 {
+    dict_metrics[37].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     size_t mask = DK_MASK(keys);
     for (Py_ssize_t ix = 0; ix != n; ix++, ep++) {
         Py_hash_t hash = unicode_get_hash(ep->me_key);
@@ -1385,6 +1630,7 @@ build_indices_unicode(PyDictKeysObject *keys, PyDictUnicodeEntry *ep, Py_ssize_t
         }
         dictkeys_set_index(keys, i, ix);
     }
+    dict_metrics[37].total_time += elapsed(start);
 }
 
 /*
@@ -1404,6 +1650,9 @@ This function supports:
 static int
 dictresize(PyDictObject *mp, uint8_t log2_newsize, int unicode)
 {
+    dict_metrics[0].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictKeysObject *oldkeys;
     PyDictValues *oldvalues;
 
@@ -1560,12 +1809,20 @@ dictresize(PyDictObject *mp, uint8_t log2_newsize, int unicode)
     mp->ma_keys->dk_usable -= numentries;
     mp->ma_keys->dk_nentries = numentries;
     ASSERT_CONSISTENT(mp);
+    dict_metrics[0].total_time += elapsed(start);
     return 0;
 }
 
 static PyObject *
 dict_new_presized(Py_ssize_t minused, bool unicode)
 {
+    dict_metrics[38].usages++;
+    if (dict_metrics[38].usages == 1) {
+        dict_metrics[38].extra_1 = minused;
+    }
+    dict_metrics[38].extra_1 = (dict_metrics[38].extra_1 + minused) / 2;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     const uint8_t log2_max_presize = 17;
     const Py_ssize_t max_presize = ((Py_ssize_t)1) << log2_max_presize;
     uint8_t log2_newsize;
@@ -1588,13 +1845,20 @@ dict_new_presized(Py_ssize_t minused, bool unicode)
     new_keys = new_keys_object(log2_newsize, unicode);
     if (new_keys == NULL)
         return NULL;
-    return new_dict(new_keys, NULL, 0, 0);
+    PyObject *ret = new_dict(new_keys, NULL, 0, 0);
+    dict_metrics[38].total_time += elapsed(start);
+    return ret;
 }
 
 PyObject *
 _PyDict_NewPresized(Py_ssize_t minused)
 {
-    return dict_new_presized(minused, false);
+    dict_metrics[39].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    PyObject *ret = dict_new_presized(minused, false);
+    dict_metrics[39].total_time += elapsed(start);
+    return ret;
 }
 
 PyObject *
@@ -1602,6 +1866,9 @@ _PyDict_FromItems(PyObject *const *keys, Py_ssize_t keys_offset,
                   PyObject *const *values, Py_ssize_t values_offset,
                   Py_ssize_t length)
 {
+    dict_metrics[40].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     bool unicode = true;
     PyObject *const *ks = keys;
 
@@ -1632,6 +1899,7 @@ _PyDict_FromItems(PyObject *const *keys, Py_ssize_t keys_offset,
         vs += values_offset;
     }
 
+    dict_metrics[40].total_time += elapsed(start);
     return dict;
 }
 
@@ -1648,6 +1916,9 @@ _PyDict_FromItems(PyObject *const *keys, Py_ssize_t keys_offset,
 PyObject *
 PyDict_GetItem(PyObject *op, PyObject *key)
 {
+    dict_metrics[41].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (!PyDict_Check(op)) {
         return NULL;
     }
@@ -1682,6 +1953,12 @@ PyDict_GetItem(PyObject *op, PyObject *key)
 
 
     assert(ix >= 0 || value == NULL);
+    dict_metrics[41].total_time += elapsed(start);
+    if (value == NULL) {
+        dict_metrics[41].extra_2 += 1;
+    } else {
+        dict_metrics[41].extra_1 += 1;
+    }
     return value;
 }
 
@@ -1689,6 +1966,9 @@ Py_ssize_t
 _PyDict_GetItemHint(PyDictObject *mp, PyObject *key,
                     Py_ssize_t hint, PyObject **value)
 {
+    dict_metrics[42].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(*value == NULL);
     assert(PyDict_CheckExact((PyObject*)mp));
     assert(PyUnicode_CheckExact(key));
@@ -1708,6 +1988,8 @@ _PyDict_GetItemHint(PyDictObject *mp, PyObject *key,
                 }
                 if (res != NULL) {
                     *value = res;
+                    dict_metrics[42].total_time += elapsed(start);
+                    dict_metrics[42].extra_1 += 1;
                     return hint;
                 }
             }
@@ -1724,6 +2006,8 @@ _PyDict_GetItemHint(PyDictObject *mp, PyObject *key,
                 }
                 if (res != NULL) {
                     *value = res;
+                    dict_metrics[42].total_time += elapsed(start);
+                    dict_metrics[42].extra_1 += 1;
                     return hint;
                 }
             }
@@ -1738,7 +2022,14 @@ _PyDict_GetItemHint(PyDictObject *mp, PyObject *key,
         }
     }
 
-    return _Py_dict_lookup(mp, key, hash, value);
+    Py_ssize_t ret = _Py_dict_lookup(mp, key, hash, value);
+    dict_metrics[42].total_time += elapsed(start);
+    if (ret == DKIX_EMPTY) {
+        dict_metrics[42].extra_2 += 1;
+    } else {
+        dict_metrics[42].extra_1 += elapsed(start);
+    }
+    return ret;
 }
 
 /* Same as PyDict_GetItemWithError() but with hash supplied by caller.
@@ -1748,17 +2039,27 @@ _PyDict_GetItemHint(PyDictObject *mp, PyObject *key,
 PyObject *
 _PyDict_GetItem_KnownHash(PyObject *op, PyObject *key, Py_hash_t hash)
 {
+    dict_metrics[43].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t ix; (void)ix;
     PyDictObject *mp = (PyDictObject *)op;
     PyObject *value;
 
     if (!PyDict_Check(op)) {
         PyErr_BadInternalCall();
+        dict_metrics[43].total_time += elapsed(start);
         return NULL;
     }
 
     ix = _Py_dict_lookup(mp, key, hash, &value);
     assert(ix >= 0 || value == NULL);
+    dict_metrics[43].total_time += elapsed(start);
+    if (value == NULL) {
+        dict_metrics[43].extra_2 += 1;
+    } else {
+        dict_metrics[43].extra_1 += 1;
+    }
     return value;
 }
 
@@ -1769,6 +2070,9 @@ _PyDict_GetItem_KnownHash(PyObject *op, PyObject *key, Py_hash_t hash)
 PyObject *
 PyDict_GetItemWithError(PyObject *op, PyObject *key)
 {
+    dict_metrics[44].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t ix; (void)ix;
     Py_hash_t hash;
     PyDictObject*mp = (PyDictObject *)op;
@@ -1776,54 +2080,80 @@ PyDict_GetItemWithError(PyObject *op, PyObject *key)
 
     if (!PyDict_Check(op)) {
         PyErr_BadInternalCall();
+        dict_metrics[44].total_time += elapsed(start);
         return NULL;
     }
     if (!PyUnicode_CheckExact(key) || (hash = unicode_get_hash(key)) == -1)
     {
         hash = PyObject_Hash(key);
         if (hash == -1) {
+            dict_metrics[44].total_time += elapsed(start);
             return NULL;
         }
     }
 
     ix = _Py_dict_lookup(mp, key, hash, &value);
     assert(ix >= 0 || value == NULL);
+    dict_metrics[44].total_time += elapsed(start);
+    if (value == NULL) {
+        dict_metrics[44].extra_2 += 1;
+    } else {
+        dict_metrics[44].extra_1 += 1;
+    }
     return value;
 }
 
 PyObject *
 _PyDict_GetItemWithError(PyObject *dp, PyObject *kv)
 {
+    dict_metrics[45].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(PyUnicode_CheckExact(kv));
     Py_hash_t hash = kv->ob_type->tp_hash(kv);
     if (hash == -1) {
+        dict_metrics[45].total_time += elapsed(start);
         return NULL;
     }
-    return _PyDict_GetItem_KnownHash(dp, kv, hash);
+    PyObject *ret = _PyDict_GetItem_KnownHash(dp, kv, hash);
+    dict_metrics[45].total_time += elapsed(start);
+    return ret;
 }
 
 PyObject *
 _PyDict_GetItemIdWithError(PyObject *dp, _Py_Identifier *key)
 {
+    dict_metrics[46].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *kv;
     kv = _PyUnicode_FromId(key); /* borrowed */
     if (kv == NULL)
         return NULL;
     Py_hash_t hash = unicode_get_hash(kv);
     assert (hash != -1);  /* interned strings have their hash value initialised */
-    return _PyDict_GetItem_KnownHash(dp, kv, hash);
+    PyObject *ret = _PyDict_GetItem_KnownHash(dp, kv, hash);
+    dict_metrics[46].total_time += elapsed(start);
+    return ret;
 }
 
 PyObject *
 _PyDict_GetItemStringWithError(PyObject *v, const char *key)
 {
+    dict_metrics[47].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *kv, *rv;
     kv = PyUnicode_FromString(key);
     if (kv == NULL) {
+        dict_metrics[47].total_time += elapsed(start);
+        dict_metrics[47].extra_2 += 1;
         return NULL;
     }
     rv = PyDict_GetItemWithError(v, kv);
     Py_DECREF(kv);
+    dict_metrics[47].total_time += elapsed(start);
+    dict_metrics[47].extra_1 += 1;
     return rv;
 }
 
@@ -1840,26 +2170,43 @@ _PyDict_GetItemStringWithError(PyObject *v, const char *key)
 PyObject *
 _PyDict_LoadGlobal(PyDictObject *globals, PyDictObject *builtins, PyObject *key)
 {
+    dict_metrics[48].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t ix;
     Py_hash_t hash;
     PyObject *value;
 
     if (!PyUnicode_CheckExact(key) || (hash = unicode_get_hash(key)) == -1) {
         hash = PyObject_Hash(key);
-        if (hash == -1)
+        if (hash == -1) {
+            dict_metrics[48].total_time += elapsed(start);
             return NULL;
+        }
     }
 
     /* namespace 1: globals */
     ix = _Py_dict_lookup(globals, key, hash, &value);
-    if (ix == DKIX_ERROR)
+    if (ix == DKIX_ERROR) {
+        dict_metrics[48].total_time += elapsed(start);
+        dict_metrics[48].extra_2 += 1;
         return NULL;
-    if (ix != DKIX_EMPTY && value != NULL)
+    }
+    if (ix != DKIX_EMPTY && value != NULL) {
+        dict_metrics[48].total_time += elapsed(start);
+        dict_metrics[48].extra_1 += 1;
         return value;
+    }
 
     /* namespace 2: builtins */
     ix = _Py_dict_lookup(builtins, key, hash, &value);
     assert(ix >= 0 || value == NULL);
+    dict_metrics[48].total_time += elapsed(start);
+    if (value == NULL) {
+        dict_metrics[48].extra_2 += 1;
+    } else {
+        dict_metrics[48].extra_1 += 1;
+    }
     return value;
 }
 
@@ -1867,6 +2214,9 @@ _PyDict_LoadGlobal(PyDictObject *globals, PyDictObject *builtins, PyObject *key)
 int
 _PyDict_SetItem_Take2(PyDictObject *mp, PyObject *key, PyObject *value)
 {
+    dict_metrics[49].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(key);
     assert(value);
     assert(PyDict_Check(mp));
@@ -1880,10 +2230,14 @@ _PyDict_SetItem_Take2(PyDictObject *mp, PyObject *key, PyObject *value)
         }
     }
     if (mp->ma_keys == Py_EMPTY_KEYS) {
-        return insert_to_emptydict(mp, key, hash, value);
+        int ret = insert_to_emptydict(mp, key, hash, value);
+        dict_metrics[49].total_time += elapsed(start);
+        return ret;
     }
     /* insertdict() handles any resizing that might be necessary */
-    return insertdict(mp, key, hash, value);
+    int ret = insertdict(mp, key, hash, value);
+    dict_metrics[49].total_time += elapsed(start);
+    return ret;
 }
 
 /* CAUTION: PyDict_SetItem() must guarantee that it won't resize the
@@ -1895,25 +2249,35 @@ _PyDict_SetItem_Take2(PyDictObject *mp, PyObject *key, PyObject *value)
 int
 PyDict_SetItem(PyObject *op, PyObject *key, PyObject *value)
 {
+    dict_metrics[50].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (!PyDict_Check(op)) {
         PyErr_BadInternalCall();
+        dict_metrics[50].total_time += elapsed(start);
         return -1;
     }
     assert(key);
     assert(value);
     Py_INCREF(key);
     Py_INCREF(value);
-    return _PyDict_SetItem_Take2((PyDictObject *)op, key, value);
+    int ret = _PyDict_SetItem_Take2((PyDictObject *)op, key, value);
+    dict_metrics[50].total_time += elapsed(start);
+    return ret;
 }
 
 int
 _PyDict_SetItem_KnownHash(PyObject *op, PyObject *key, PyObject *value,
                          Py_hash_t hash)
 {
+    dict_metrics[51].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictObject *mp;
 
     if (!PyDict_Check(op)) {
         PyErr_BadInternalCall();
+        dict_metrics[51].total_time += elapsed(start);
         return -1;
     }
     assert(key);
@@ -1924,15 +2288,22 @@ _PyDict_SetItem_KnownHash(PyObject *op, PyObject *key, PyObject *value,
     Py_INCREF(key);
     Py_INCREF(value);
     if (mp->ma_keys == Py_EMPTY_KEYS) {
-        return insert_to_emptydict(mp, key, hash, value);
+        int ret = insert_to_emptydict(mp, key, hash, value);
+        dict_metrics[51].total_time += elapsed(start);
+        return ret;
     }
     /* insertdict() handles any resizing that might be necessary */
-    return insertdict(mp, key, hash, value);
+    int ret = insertdict(mp, key, hash, value);
+    dict_metrics[51].total_time += elapsed(start);
+    return ret;
 }
 
 static void
 delete_index_from_values(PyDictValues *values, Py_ssize_t ix)
 {
+    dict_metrics[52].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     uint8_t *size_ptr = ((uint8_t *)values)-2;
     int size = *size_ptr;
     int i;
@@ -1944,12 +2315,16 @@ delete_index_from_values(PyDictValues *values, Py_ssize_t ix)
         size_ptr[-i] = size_ptr[-i-1];
     }
     *size_ptr = size -1;
+    dict_metrics[52].total_time += elapsed(start);
 }
 
 static int
 delitem_common(PyDictObject *mp, Py_hash_t hash, Py_ssize_t ix,
                PyObject *old_value)
 {
+    dict_metrics[53].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *old_key;
 
     Py_ssize_t hashpos = lookdict_index(mp->ma_keys, hash, ix);
@@ -1986,12 +2361,16 @@ delitem_common(PyDictObject *mp, Py_hash_t hash, Py_ssize_t ix,
     Py_DECREF(old_value);
 
     ASSERT_CONSISTENT(mp);
+    dict_metrics[53].total_time += elapsed(start);
     return 0;
 }
 
 int
 PyDict_DelItem(PyObject *op, PyObject *key)
 {
+    dict_metrics[54].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_hash_t hash;
     assert(key);
     if (!PyUnicode_CheckExact(key) || (hash = unicode_get_hash(key)) == -1) {
@@ -2000,32 +2379,46 @@ PyDict_DelItem(PyObject *op, PyObject *key)
             return -1;
     }
 
-    return _PyDict_DelItem_KnownHash(op, key, hash);
+    int ret = _PyDict_DelItem_KnownHash(op, key, hash);
+    dict_metrics[54].total_time += elapsed(start);
+    return ret;
 }
 
 int
 _PyDict_DelItem_KnownHash(PyObject *op, PyObject *key, Py_hash_t hash)
 {
+    dict_metrics[55].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t ix;
     PyDictObject *mp;
     PyObject *old_value;
 
     if (!PyDict_Check(op)) {
         PyErr_BadInternalCall();
+        dict_metrics[55].total_time += elapsed(start);
         return -1;
     }
     assert(key);
     assert(hash != -1);
     mp = (PyDictObject *)op;
     ix = _Py_dict_lookup(mp, key, hash, &old_value);
-    if (ix == DKIX_ERROR)
+    if (ix == DKIX_ERROR) {
+        dict_metrics[55].total_time += elapsed(start);
+        dict_metrics[55].extra_2 += 1;
         return -1;
+    }
     if (ix == DKIX_EMPTY || old_value == NULL) {
         _PyErr_SetKeyError(key);
+        dict_metrics[55].total_time += elapsed(start);
+        dict_metrics[55].extra_2 += 1;
         return -1;
     }
 
-    return delitem_common(mp, hash, ix, old_value);
+    int ret = delitem_common(mp, hash, ix, old_value);
+    dict_metrics[55].total_time += elapsed(start);
+    dict_metrics[55].extra_1 += 1;
+    return ret;
 }
 
 /* This function promises that the predicate -> deletion sequence is atomic
@@ -2036,6 +2429,9 @@ int
 _PyDict_DelItemIf(PyObject *op, PyObject *key,
                   int (*predicate)(PyObject *value))
 {
+    dict_metrics[56].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t hashpos, ix;
     PyDictObject *mp;
     Py_hash_t hash;
@@ -2044,49 +2440,67 @@ _PyDict_DelItemIf(PyObject *op, PyObject *key,
 
     if (!PyDict_Check(op)) {
         PyErr_BadInternalCall();
+        dict_metrics[56].total_time += elapsed(start);
         return -1;
     }
     assert(key);
     hash = PyObject_Hash(key);
-    if (hash == -1)
+    if (hash == -1) {
+        dict_metrics[56].total_time += elapsed(start);
         return -1;
+    }
     mp = (PyDictObject *)op;
     ix = _Py_dict_lookup(mp, key, hash, &old_value);
-    if (ix == DKIX_ERROR)
+    if (ix == DKIX_ERROR) {
+        dict_metrics[56].total_time += elapsed(start);
         return -1;
+    }
     if (ix == DKIX_EMPTY || old_value == NULL) {
         _PyErr_SetKeyError(key);
+        dict_metrics[56].total_time += elapsed(start);
         return -1;
     }
 
     res = predicate(old_value);
-    if (res == -1)
+    if (res == -1) {
+        dict_metrics[56].total_time += elapsed(start);
         return -1;
+    }
 
     hashpos = lookdict_index(mp->ma_keys, hash, ix);
     assert(hashpos >= 0);
 
-    if (res > 0)
+    if (res > 0) {
+        dict_metrics[56].total_time += elapsed(start);
         return delitem_common(mp, hashpos, ix, old_value);
-    else
+    }
+    else {
+        dict_metrics[56].total_time += elapsed(start);
         return 0;
+    }
 }
 
 
 void
 PyDict_Clear(PyObject *op)
 {
+    dict_metrics[57].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictObject *mp;
     PyDictKeysObject *oldkeys;
     PyDictValues *oldvalues;
     Py_ssize_t i, n;
 
-    if (!PyDict_Check(op))
+    if (!PyDict_Check(op)) {
+        dict_metrics[57].total_time += elapsed(start);
         return;
+    }
     mp = ((PyDictObject *)op);
     oldkeys = mp->ma_keys;
     oldvalues = mp->ma_values;
     if (oldkeys == Py_EMPTY_KEYS) {
+        dict_metrics[57].total_time += elapsed(start);
         return;
     }
     /* Empty the dict... */
@@ -2108,6 +2522,7 @@ PyDict_Clear(PyObject *op)
        dictkeys_decref(oldkeys);
     }
     ASSERT_CONSISTENT(mp);
+    dict_metrics[57].total_time += elapsed(start);
 }
 
 /* Internal version of PyDict_Next that returns a hash value in addition
@@ -2119,19 +2534,26 @@ int
 _PyDict_Next(PyObject *op, Py_ssize_t *ppos, PyObject **pkey,
              PyObject **pvalue, Py_hash_t *phash)
 {
+    dict_metrics[58].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t i;
     PyDictObject *mp;
     PyObject *key, *value;
     Py_hash_t hash;
 
-    if (!PyDict_Check(op))
+    if (!PyDict_Check(op)) {
+        dict_metrics[58].total_time += elapsed(start);
         return 0;
+    }
     mp = (PyDictObject *)op;
     i = *ppos;
     if (mp->ma_values) {
         assert(mp->ma_used <= SHARED_KEYS_MAX_SIZE);
-        if (i < 0 || i >= mp->ma_used)
+        if (i < 0 || i >= mp->ma_used) {
+            dict_metrics[58].total_time += elapsed(start);
             return 0;
+        }
         int index = get_index_from_order(mp, i);
         value = mp->ma_values->values[index];
 
@@ -2141,16 +2563,20 @@ _PyDict_Next(PyObject *op, Py_ssize_t *ppos, PyObject **pkey,
     }
     else {
         Py_ssize_t n = mp->ma_keys->dk_nentries;
-        if (i < 0 || i >= n)
+        if (i < 0 || i >= n) {
+            dict_metrics[58].total_time += elapsed(start);
             return 0;
+        }
         if (DK_IS_UNICODE(mp->ma_keys)) {
             PyDictUnicodeEntry *entry_ptr = &DK_UNICODE_ENTRIES(mp->ma_keys)[i];
             while (i < n && entry_ptr->me_value == NULL) {
                 entry_ptr++;
                 i++;
             }
-            if (i >= n)
+            if (i >= n) {
+                dict_metrics[58].total_time += elapsed(start);
                 return 0;
+            }
             key = entry_ptr->me_key;
             hash = unicode_get_hash(entry_ptr->me_key);
             value = entry_ptr->me_value;
@@ -2161,8 +2587,10 @@ _PyDict_Next(PyObject *op, Py_ssize_t *ppos, PyObject **pkey,
                 entry_ptr++;
                 i++;
             }
-            if (i >= n)
+            if (i >= n) {
+                dict_metrics[58].total_time += elapsed(start);
                 return 0;
+            }
             key = entry_ptr->me_key;
             hash = entry_ptr->me_hash;
             value = entry_ptr->me_value;
@@ -2175,6 +2603,7 @@ _PyDict_Next(PyObject *op, Py_ssize_t *ppos, PyObject **pkey,
         *pvalue = value;
     if (phash)
         *phash = hash;
+    dict_metrics[58].total_time += elapsed(start);
     return 1;
 }
 
@@ -2199,13 +2628,21 @@ _PyDict_Next(PyObject *op, Py_ssize_t *ppos, PyObject **pkey,
 int
 PyDict_Next(PyObject *op, Py_ssize_t *ppos, PyObject **pkey, PyObject **pvalue)
 {
-    return _PyDict_Next(op, ppos, pkey, pvalue, NULL);
+    dict_metrics[59].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    int ret = _PyDict_Next(op, ppos, pkey, pvalue, NULL);
+    dict_metrics[59].total_time += elapsed(start);
+    return ret;
 }
 
 /* Internal version of dict.pop(). */
 PyObject *
 _PyDict_Pop_KnownHash(PyObject *dict, PyObject *key, Py_hash_t hash, PyObject *deflt)
 {
+    dict_metrics[60].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t ix;
     PyObject *old_value;
     PyDictObject *mp;
@@ -2216,20 +2653,26 @@ _PyDict_Pop_KnownHash(PyObject *dict, PyObject *key, Py_hash_t hash, PyObject *d
     if (mp->ma_used == 0) {
         if (deflt) {
             Py_INCREF(deflt);
+            dict_metrics[60].total_time += elapsed(start);
             return deflt;
         }
         _PyErr_SetKeyError(key);
+        dict_metrics[60].total_time += elapsed(start);
         return NULL;
     }
     ix = _Py_dict_lookup(mp, key, hash, &old_value);
-    if (ix == DKIX_ERROR)
+    if (ix == DKIX_ERROR) {
+        dict_metrics[60].total_time += elapsed(start);
         return NULL;
+    }
     if (ix == DKIX_EMPTY || old_value == NULL) {
         if (deflt) {
             Py_INCREF(deflt);
+            dict_metrics[60].total_time += elapsed(start);
             return deflt;
         }
         _PyErr_SetKeyError(key);
+        dict_metrics[60].total_time += elapsed(start);
         return NULL;
     }
     assert(old_value != NULL);
@@ -2237,42 +2680,57 @@ _PyDict_Pop_KnownHash(PyObject *dict, PyObject *key, Py_hash_t hash, PyObject *d
     delitem_common(mp, hash, ix, old_value);
 
     ASSERT_CONSISTENT(mp);
+    dict_metrics[60].total_time += elapsed(start);
     return old_value;
 }
 
 PyObject *
 _PyDict_Pop(PyObject *dict, PyObject *key, PyObject *deflt)
 {
+    dict_metrics[61].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_hash_t hash;
 
     if (((PyDictObject *)dict)->ma_used == 0) {
         if (deflt) {
             Py_INCREF(deflt);
+            dict_metrics[61].total_time += elapsed(start);
             return deflt;
         }
         _PyErr_SetKeyError(key);
+        dict_metrics[61].total_time += elapsed(start);
         return NULL;
     }
     if (!PyUnicode_CheckExact(key) || (hash = unicode_get_hash(key)) == -1) {
         hash = PyObject_Hash(key);
-        if (hash == -1)
+        if (hash == -1) {
+            dict_metrics[61].total_time += elapsed(start);
             return NULL;
+        }
     }
-    return _PyDict_Pop_KnownHash(dict, key, hash, deflt);
+    PyObject *ret = _PyDict_Pop_KnownHash(dict, key, hash, deflt);
+    dict_metrics[61].total_time += elapsed(start);
+    return ret;
 }
 
 /* Internal version of dict.from_keys().  It is subclass-friendly. */
 PyObject *
 _PyDict_FromKeys(PyObject *cls, PyObject *iterable, PyObject *value)
 {
+    dict_metrics[62].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *it;       /* iter(iterable) */
     PyObject *key;
     PyObject *d;
     int status;
 
     d = _PyObject_CallNoArgs(cls);
-    if (d == NULL)
+    if (d == NULL) {
+        dict_metrics[62].total_time += elapsed(start);
         return NULL;
+    }
 
     if (PyDict_CheckExact(d) && ((PyDictObject *)d)->ma_used == 0) {
         if (PyDict_CheckExact(iterable)) {
@@ -2285,6 +2743,7 @@ _PyDict_FromKeys(PyObject *cls, PyObject *iterable, PyObject *value)
             int unicode = DK_IS_UNICODE(((PyDictObject*)iterable)->ma_keys);
             if (dictresize(mp, estimate_log2_keysize(PyDict_GET_SIZE(iterable)), unicode)) {
                 Py_DECREF(d);
+                dict_metrics[62].total_time += elapsed(start);
                 return NULL;
             }
 
@@ -2293,9 +2752,11 @@ _PyDict_FromKeys(PyObject *cls, PyObject *iterable, PyObject *value)
                 Py_INCREF(value);
                 if (insertdict(mp, key, hash, value)) {
                     Py_DECREF(d);
+                    dict_metrics[62].total_time += elapsed(start);
                     return NULL;
                 }
             }
+            dict_metrics[62].total_time += elapsed(start);
             return d;
         }
         if (PyAnySet_CheckExact(iterable)) {
@@ -2306,6 +2767,7 @@ _PyDict_FromKeys(PyObject *cls, PyObject *iterable, PyObject *value)
 
             if (dictresize(mp, estimate_log2_keysize(PySet_GET_SIZE(iterable)), 0)) {
                 Py_DECREF(d);
+                dict_metrics[62].total_time += elapsed(start);
                 return NULL;
             }
 
@@ -2314,9 +2776,11 @@ _PyDict_FromKeys(PyObject *cls, PyObject *iterable, PyObject *value)
                 Py_INCREF(value);
                 if (insertdict(mp, key, hash, value)) {
                     Py_DECREF(d);
+                    dict_metrics[62].total_time += elapsed(start);
                     return NULL;
                 }
             }
+            dict_metrics[62].total_time += elapsed(start);
             return d;
         }
     }
@@ -2324,6 +2788,7 @@ _PyDict_FromKeys(PyObject *cls, PyObject *iterable, PyObject *value)
     it = PyObject_GetIter(iterable);
     if (it == NULL){
         Py_DECREF(d);
+        dict_metrics[62].total_time += elapsed(start);
         return NULL;
     }
 
@@ -2346,11 +2811,13 @@ _PyDict_FromKeys(PyObject *cls, PyObject *iterable, PyObject *value)
     if (PyErr_Occurred())
         goto Fail;
     Py_DECREF(it);
+    dict_metrics[62].total_time += elapsed(start);
     return d;
 
 Fail:
     Py_DECREF(it);
     Py_DECREF(d);
+    dict_metrics[62].total_time += elapsed(start);
     return NULL;
 }
 
@@ -2359,6 +2826,9 @@ Fail:
 static void
 dict_dealloc(PyDictObject *mp)
 {
+    dict_metrics[63].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictValues *values = mp->ma_values;
     PyDictKeysObject *keys = mp->ma_keys;
     Py_ssize_t i, n;
@@ -2393,12 +2863,16 @@ dict_dealloc(PyDictObject *mp)
         Py_TYPE(mp)->tp_free((PyObject *)mp);
     }
     Py_TRASHCAN_END
+    dict_metrics[63].total_time += elapsed(start);
 }
 
 
 static PyObject *
 dict_repr(PyDictObject *mp)
 {
+    dict_metrics[64].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t i;
     PyObject *key = NULL, *value = NULL;
     _PyUnicodeWriter writer;
@@ -2406,11 +2880,13 @@ dict_repr(PyDictObject *mp)
 
     i = Py_ReprEnter((PyObject *)mp);
     if (i != 0) {
+        dict_metrics[64].total_time += elapsed(start);
         return i > 0 ? PyUnicode_FromString("{...}") : NULL;
     }
 
     if (mp->ma_used == 0) {
         Py_ReprLeave((PyObject *)mp);
+        dict_metrics[64].total_time += elapsed(start);
         return PyUnicode_FromString("{}");
     }
 
@@ -2469,37 +2945,51 @@ dict_repr(PyDictObject *mp)
 
     Py_ReprLeave((PyObject *)mp);
 
-    return _PyUnicodeWriter_Finish(&writer);
+    PyObject *ret = _PyUnicodeWriter_Finish(&writer);
+    dict_metrics[64].total_time += elapsed(start);
+    return ret;
 
 error:
     Py_ReprLeave((PyObject *)mp);
     _PyUnicodeWriter_Dealloc(&writer);
     Py_XDECREF(key);
     Py_XDECREF(value);
+    dict_metrics[64].total_time += elapsed(start);
     return NULL;
 }
 
 static Py_ssize_t
 dict_length(PyDictObject *mp)
 {
+    dict_metrics[65].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    dict_metrics[65].total_time += elapsed(start);
     return mp->ma_used;
 }
 
 static PyObject *
 dict_subscript(PyDictObject *mp, PyObject *key)
 {
+    dict_metrics[66].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t ix;
     Py_hash_t hash;
     PyObject *value;
 
     if (!PyUnicode_CheckExact(key) || (hash = unicode_get_hash(key)) == -1) {
         hash = PyObject_Hash(key);
-        if (hash == -1)
+        if (hash == -1) {
+            dict_metrics[66].total_time += elapsed(start);
             return NULL;
+        }
     }
     ix = _Py_dict_lookup(mp, key, hash, &value);
-    if (ix == DKIX_ERROR)
+    if (ix == DKIX_ERROR) {
+        dict_metrics[66].total_time += elapsed(start);
         return NULL;
+    }
     if (ix == DKIX_EMPTY || value == NULL) {
         if (!PyDict_CheckExact(mp)) {
             /* Look up __missing__ method if we're a subclass. */
@@ -2509,25 +2999,39 @@ dict_subscript(PyDictObject *mp, PyObject *key)
             if (missing != NULL) {
                 res = PyObject_CallOneArg(missing, key);
                 Py_DECREF(missing);
+                dict_metrics[66].total_time += elapsed(start);
                 return res;
             }
-            else if (PyErr_Occurred())
+            else if (PyErr_Occurred()) {
+                dict_metrics[66].total_time += elapsed(start);
                 return NULL;
+            }
         }
         _PyErr_SetKeyError(key);
+        dict_metrics[66].total_time += elapsed(start);
         return NULL;
     }
     Py_INCREF(value);
+    dict_metrics[66].total_time += elapsed(start);
     return value;
 }
 
 static int
 dict_ass_sub(PyDictObject *mp, PyObject *v, PyObject *w)
 {
-    if (w == NULL)
-        return PyDict_DelItem((PyObject *)mp, v);
-    else
-        return PyDict_SetItem((PyObject *)mp, v, w);
+    dict_metrics[67].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    if (w == NULL) {
+        int ret = PyDict_DelItem((PyObject *)mp, v);
+        dict_metrics[67].total_time += elapsed(start);
+        return ret;
+    }
+    else {
+        int ret = PyDict_SetItem((PyObject *)mp, v, w);
+        dict_metrics[67].total_time += elapsed(start);
+        return ret;
+    }
 }
 
 static PyMappingMethods dict_as_mapping = {
@@ -2539,14 +3043,19 @@ static PyMappingMethods dict_as_mapping = {
 static PyObject *
 dict_keys(PyDictObject *mp)
 {
+    dict_metrics[68].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *v;
     Py_ssize_t n;
 
   again:
     n = mp->ma_used;
     v = PyList_New(n);
-    if (v == NULL)
+    if (v == NULL) {
+        dict_metrics[68].total_time += elapsed(start);
         return NULL;
+    }
     if (n != mp->ma_used) {
         /* Durnit.  The allocations caused the dict to resize.
          * Just start over, this shouldn't normally happen.
@@ -2565,20 +3074,26 @@ dict_keys(PyDictObject *mp)
         j++;
     }
     assert(j == n);
+    dict_metrics[68].total_time += elapsed(start);
     return v;
 }
 
 static PyObject *
 dict_values(PyDictObject *mp)
 {
+    dict_metrics[69].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *v;
     Py_ssize_t n;
 
   again:
     n = mp->ma_used;
     v = PyList_New(n);
-    if (v == NULL)
+    if (v == NULL) {
+        dict_metrics[69].total_time += elapsed(start);
         return NULL;
+    }
     if (n != mp->ma_used) {
         /* Durnit.  The allocations caused the dict to resize.
          * Just start over, this shouldn't normally happen.
@@ -2597,12 +3112,16 @@ dict_values(PyDictObject *mp)
         j++;
     }
     assert(j == n);
+    dict_metrics[69].total_time += elapsed(start);
     return v;
 }
 
 static PyObject *
 dict_items(PyDictObject *mp)
 {
+    dict_metrics[70].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *v;
     Py_ssize_t i, n;
     PyObject *item;
@@ -2614,12 +3133,15 @@ dict_items(PyDictObject *mp)
   again:
     n = mp->ma_used;
     v = PyList_New(n);
-    if (v == NULL)
+    if (v == NULL) {
+        dict_metrics[70].total_time += elapsed(start);
         return NULL;
+    }
     for (i = 0; i < n; i++) {
         item = PyTuple_New(2);
         if (item == NULL) {
             Py_DECREF(v);
+            dict_metrics[70].total_time += elapsed(start);
             return NULL;
         }
         PyList_SET_ITEM(v, i, item);
@@ -2645,6 +3167,7 @@ dict_items(PyDictObject *mp)
         j++;
     }
     assert(j == n);
+    dict_metrics[70].total_time += elapsed(start);
     return v;
 }
 
@@ -2662,31 +3185,49 @@ static PyObject *
 dict_fromkeys_impl(PyTypeObject *type, PyObject *iterable, PyObject *value)
 /*[clinic end generated code: output=8fb98e4b10384999 input=382ba4855d0f74c3]*/
 {
-    return _PyDict_FromKeys((PyObject *)type, iterable, value);
+    dict_metrics[71].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    PyObject *ret = _PyDict_FromKeys((PyObject *)type, iterable, value);
+    dict_metrics[71].total_time += elapsed(start);
+    return ret;
 }
 
 /* Single-arg dict update; used by dict_update_common and operators. */
 static int
 dict_update_arg(PyObject *self, PyObject *arg)
 {
+    dict_metrics[72].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (PyDict_CheckExact(arg)) {
-        return PyDict_Merge(self, arg, 1);
+        int ret = PyDict_Merge(self, arg, 1);
+        dict_metrics[72].total_time += elapsed(start);
+        return ret;
     }
     PyObject *func;
     if (_PyObject_LookupAttr(arg, &_Py_ID(keys), &func) < 0) {
+        dict_metrics[72].total_time += elapsed(start);
         return -1;
     }
     if (func != NULL) {
         Py_DECREF(func);
-        return PyDict_Merge(self, arg, 1);
+        int ret = PyDict_Merge(self, arg, 1);
+        dict_metrics[72].total_time += elapsed(start);
+        return ret;
     }
-    return PyDict_MergeFromSeq2(self, arg, 1);
+    int ret = PyDict_MergeFromSeq2(self, arg, 1);
+    dict_metrics[72].total_time += elapsed(start);
+    return ret;
 }
 
 static int
 dict_update_common(PyObject *self, PyObject *args, PyObject *kwds,
                    const char *methname)
 {
+    dict_metrics[73].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *arg = NULL;
     int result = 0;
 
@@ -2703,6 +3244,7 @@ dict_update_common(PyObject *self, PyObject *args, PyObject *kwds,
         else
             result = -1;
     }
+    dict_metrics[73].total_time += elapsed(start);
     return result;
 }
 
@@ -2712,8 +3254,14 @@ dict_update_common(PyObject *self, PyObject *args, PyObject *kwds,
 static PyObject *
 dict_update(PyObject *self, PyObject *args, PyObject *kwds)
 {
-    if (dict_update_common(self, args, kwds, "update") != -1)
+    dict_metrics[74].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    if (dict_update_common(self, args, kwds, "update") != -1) {
+        dict_metrics[74].total_time += elapsed(start);
         Py_RETURN_NONE;
+    }
+    dict_metrics[74].total_time += elapsed(start);
     return NULL;
 }
 
@@ -2730,6 +3278,9 @@ dict_update(PyObject *self, PyObject *args, PyObject *kwds)
 int
 PyDict_MergeFromSeq2(PyObject *d, PyObject *seq2, int override)
 {
+    dict_metrics[75].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *it;       /* iter(seq2) */
     Py_ssize_t i;       /* index into seq2 of current element */
     PyObject *item;     /* seq2[i] */
@@ -2740,8 +3291,10 @@ PyDict_MergeFromSeq2(PyObject *d, PyObject *seq2, int override)
     assert(seq2 != NULL);
 
     it = PyObject_GetIter(seq2);
-    if (it == NULL)
+    if (it == NULL) {
+        dict_metrics[75].total_time += elapsed(start);
         return -1;
+    }
 
     for (i = 0; ; ++i) {
         PyObject *key, *value;
@@ -2809,12 +3362,17 @@ Fail:
     i = -1;
 Return:
     Py_DECREF(it);
-    return Py_SAFE_DOWNCAST(i, Py_ssize_t, int);
+    int ret = Py_SAFE_DOWNCAST(i, Py_ssize_t, int);
+    dict_metrics[75].total_time += elapsed(start);
+    return ret;
 }
 
 static int
 dict_merge(PyObject *a, PyObject *b, int override)
 {
+    dict_metrics[76].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictObject *mp, *other;
 
     assert(0 <= override && override <= 2);
@@ -2826,14 +3384,17 @@ dict_merge(PyObject *a, PyObject *b, int override)
      */
     if (a == NULL || !PyDict_Check(a) || b == NULL) {
         PyErr_BadInternalCall();
+        dict_metrics[76].total_time += elapsed(start);
         return -1;
     }
     mp = (PyDictObject*)a;
     if (PyDict_Check(b) && (Py_TYPE(b)->tp_iter == (getiterfunc)dict_iter)) {
         other = (PyDictObject*)b;
-        if (other == mp || other->ma_used == 0)
+        if (other == mp || other->ma_used == 0) {
             /* a.update(a) or a.update({}); nothing to do */
+            dict_metrics[76].total_time += elapsed(start);
             return 0;
+        }
         if (mp->ma_used == 0) {
             /* Since the target dict is empty, PyDict_GetItem()
              * always returns NULL.  Setting override to 1
@@ -2849,6 +3410,7 @@ dict_merge(PyObject *a, PyObject *b, int override)
                      USABLE_FRACTION(DK_SIZE(okeys)/2) < other->ma_used)) {
                 PyDictKeysObject *keys = clone_combined_dict_keys(other);
                 if (keys == NULL) {
+                    dict_metrics[76].total_time += elapsed(start);
                     return -1;
                 }
 
@@ -2868,6 +3430,7 @@ dict_merge(PyObject *a, PyObject *b, int override)
                     _PyObject_GC_TRACK(mp);
                 }
 
+                dict_metrics[76].total_time += elapsed(start);
                 return 0;
             }
         }
@@ -2878,6 +3441,7 @@ dict_merge(PyObject *a, PyObject *b, int override)
         if (USABLE_FRACTION(DK_SIZE(mp->ma_keys)) < other->ma_used) {
             int unicode = DK_IS_UNICODE(other->ma_keys);
             if (dictresize(mp, estimate_log2_keysize(mp->ma_used + other->ma_used), unicode)) {
+               dict_metrics[76].total_time += elapsed(start);
                return -1;
             }
         }
@@ -2908,6 +3472,7 @@ dict_merge(PyObject *a, PyObject *b, int override)
                         _PyErr_SetKeyError(key);
                         Py_DECREF(value);
                         Py_DECREF(key);
+                        dict_metrics[76].total_time += elapsed(start);
                         return -1;
                     }
                     err = 0;
@@ -2915,12 +3480,15 @@ dict_merge(PyObject *a, PyObject *b, int override)
             }
             Py_DECREF(value);
             Py_DECREF(key);
-            if (err != 0)
+            if (err != 0) {
+                dict_metrics[76].total_time += elapsed(start);
                 return -1;
+            }
 
             if (orig_size != other->ma_keys->dk_nentries) {
                 PyErr_SetString(PyExc_RuntimeError,
                         "dict mutated during update");
+                dict_metrics[76].total_time += elapsed(start);
                 return -1;
             }
         }
@@ -2932,18 +3500,22 @@ dict_merge(PyObject *a, PyObject *b, int override)
         PyObject *key, *value;
         int status;
 
-        if (keys == NULL)
+        if (keys == NULL) {
             /* Docstring says this is equivalent to E.keys() so
              * if E doesn't have a .keys() method we want
              * AttributeError to percolate up.  Might as well
              * do the same for any other error.
              */
+            dict_metrics[76].total_time += elapsed(start);
             return -1;
+        }
 
         iter = PyObject_GetIter(keys);
         Py_DECREF(keys);
-        if (iter == NULL)
+        if (iter == NULL) {
+            dict_metrics[76].total_time += elapsed(start);
             return -1;
+        }
 
         for (key = PyIter_Next(iter); key; key = PyIter_Next(iter)) {
             if (override != 1) {
@@ -2958,6 +3530,7 @@ dict_merge(PyObject *a, PyObject *b, int override)
                     }
                     Py_DECREF(key);
                     Py_DECREF(iter);
+                    dict_metrics[76].total_time += elapsed(start);
                     return -1;
                 }
             }
@@ -2965,6 +3538,7 @@ dict_merge(PyObject *a, PyObject *b, int override)
             if (value == NULL) {
                 Py_DECREF(iter);
                 Py_DECREF(key);
+                dict_metrics[76].total_time += elapsed(start);
                 return -1;
             }
             status = PyDict_SetItem(a, key, value);
@@ -2972,58 +3546,87 @@ dict_merge(PyObject *a, PyObject *b, int override)
             Py_DECREF(value);
             if (status < 0) {
                 Py_DECREF(iter);
+                dict_metrics[76].total_time += elapsed(start);
                 return -1;
             }
         }
         Py_DECREF(iter);
-        if (PyErr_Occurred())
+        if (PyErr_Occurred()) {
             /* Iterator completed, via error */
+            dict_metrics[76].total_time += elapsed(start);
             return -1;
+        }
     }
     ASSERT_CONSISTENT(a);
+    dict_metrics[76].total_time += elapsed(start);
     return 0;
 }
 
 int
 PyDict_Update(PyObject *a, PyObject *b)
 {
-    return dict_merge(a, b, 1);
+    dict_metrics[77].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    int ret = dict_merge(a, b, 1);
+    dict_metrics[77].total_time += elapsed(start);
+    return ret;
 }
 
 int
 PyDict_Merge(PyObject *a, PyObject *b, int override)
 {
+    dict_metrics[78].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     /* XXX Deprecate override not in (0, 1). */
-    return dict_merge(a, b, override != 0);
+    int ret = dict_merge(a, b, override != 0);
+    dict_metrics[78].total_time += elapsed(start);
+    return ret;
 }
 
 int
 _PyDict_MergeEx(PyObject *a, PyObject *b, int override)
 {
-    return dict_merge(a, b, override);
+    dict_metrics[79].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    int ret = dict_merge(a, b, override);
+    dict_metrics[79].total_time += elapsed(start);
+    return ret;
 }
 
 static PyObject *
 dict_copy(PyDictObject *mp, PyObject *Py_UNUSED(ignored))
 {
-    return PyDict_Copy((PyObject*)mp);
+    dict_metrics[80].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    PyObject *ret = PyDict_Copy((PyObject*)mp);
+    dict_metrics[80].total_time += elapsed(start);
+    return ret;
 }
 
 PyObject *
 PyDict_Copy(PyObject *o)
 {
+    dict_metrics[81].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *copy;
     PyDictObject *mp;
     Py_ssize_t i, n;
 
     if (o == NULL || !PyDict_Check(o)) {
         PyErr_BadInternalCall();
+        dict_metrics[81].total_time += elapsed(start);
         return NULL;
     }
 
     mp = (PyDictObject *)o;
     if (mp->ma_used == 0) {
         /* The dict is empty; just return a new dict. */
+        dict_metrics[81].total_time += elapsed(start);
         return PyDict_New();
     }
 
@@ -3032,11 +3635,14 @@ PyDict_Copy(PyObject *o)
         Py_ssize_t size = shared_keys_usable_size(mp->ma_keys);
         PyDictValues *newvalues;
         newvalues = new_values(size);
-        if (newvalues == NULL)
+        if (newvalues == NULL) {
+            dict_metrics[81].total_time += elapsed(start);
             return PyErr_NoMemory();
+        }
         split_copy = PyObject_GC_New(PyDictObject, &PyDict_Type);
         if (split_copy == NULL) {
             free_values(newvalues);
+            dict_metrics[81].total_time += elapsed(start);
             return NULL;
         }
         size_t prefix_size = ((uint8_t *)newvalues)[-1];
@@ -3053,6 +3659,7 @@ PyDict_Copy(PyObject *o)
         }
         if (_PyObject_GC_IS_TRACKED(mp))
             _PyObject_GC_TRACK(split_copy);
+        dict_metrics[81].total_time += elapsed(start);
         return (PyObject *)split_copy;
     }
 
@@ -3076,12 +3683,14 @@ PyDict_Copy(PyObject *o)
         */
         PyDictKeysObject *keys = clone_combined_dict_keys(mp);
         if (keys == NULL) {
+            dict_metrics[81].total_time += elapsed(start);
             return NULL;
         }
         PyDictObject *new = (PyDictObject *)new_dict(keys, NULL, 0, 0);
         if (new == NULL) {
             /* In case of an error, `new_dict()` takes care of
                cleaning up `keys`. */
+            dict_metrics[81].total_time += elapsed(start);
             return NULL;
         }
 
@@ -3092,56 +3701,90 @@ PyDict_Copy(PyObject *o)
             _PyObject_GC_TRACK(new);
         }
 
+        dict_metrics[81].total_time += elapsed(start);
         return (PyObject *)new;
     }
 
     copy = PyDict_New();
-    if (copy == NULL)
+    if (copy == NULL) {
+        dict_metrics[81].total_time += elapsed(start);
         return NULL;
-    if (dict_merge(copy, o, 1) == 0)
+    }
+    if (dict_merge(copy, o, 1) == 0) {
+        dict_metrics[81].total_time += elapsed(start);
         return copy;
+    }
     Py_DECREF(copy);
+    dict_metrics[81].total_time += elapsed(start);
     return NULL;
 }
 
 Py_ssize_t
 PyDict_Size(PyObject *mp)
 {
+    dict_metrics[82].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (mp == NULL || !PyDict_Check(mp)) {
         PyErr_BadInternalCall();
+        dict_metrics[82].total_time += elapsed(start);
         return -1;
     }
-    return ((PyDictObject *)mp)->ma_used;
+    dict_metrics[82].total_time += elapsed(start);
+    Py_ssize_t the_size = ((PyDictObject *)mp)->ma_used;
+    if (dict_metrics[82].usages == 1) {
+        dict_metrics[82].extra_1 = the_size;
+    }
+    dict_metrics[82].extra_1 = (dict_metrics[82].extra_1 + the_size) / 2;
+    return the_size;
 }
 
 PyObject *
 PyDict_Keys(PyObject *mp)
 {
+    dict_metrics[83].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (mp == NULL || !PyDict_Check(mp)) {
         PyErr_BadInternalCall();
+        dict_metrics[83].total_time += elapsed(start);
         return NULL;
     }
-    return dict_keys((PyDictObject *)mp);
+    PyObject *ret = dict_keys((PyDictObject *)mp);
+    dict_metrics[83].total_time += elapsed(start);
+    return ret;
 }
 
 PyObject *
 PyDict_Values(PyObject *mp)
 {
+    dict_metrics[84].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (mp == NULL || !PyDict_Check(mp)) {
         PyErr_BadInternalCall();
+        dict_metrics[84].total_time += elapsed(start);
         return NULL;
     }
-    return dict_values((PyDictObject *)mp);
+    PyObject *ret = dict_values((PyDictObject *)mp);
+    dict_metrics[84].total_time += elapsed(start);
+    return ret;
 }
 
 PyObject *
 PyDict_Items(PyObject *mp)
 {
+    dict_metrics[85].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (mp == NULL || !PyDict_Check(mp)) {
         PyErr_BadInternalCall();
+        dict_metrics[85].total_time += elapsed(start);
         return NULL;
     }
-    return dict_items((PyDictObject *)mp);
+    PyObject *ret = dict_items((PyDictObject *)mp);
+    dict_metrics[85].total_time += elapsed(start);
+    return ret;
 }
 
 /* Return 1 if dicts equal, 0 if not, -1 if error.
@@ -3151,11 +3794,16 @@ PyDict_Items(PyObject *mp)
 static int
 dict_equal(PyDictObject *a, PyDictObject *b)
 {
+    dict_metrics[86].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t i;
 
-    if (a->ma_used != b->ma_used)
+    if (a->ma_used != b->ma_used) {
         /* can't be equal if # of entries differ */
+        dict_metrics[86].total_time += elapsed(start);
         return 0;
+    }
     /* Same # of entries -- check all of 'em.  Exit early on any diff. */
     for (i = 0; i < a->ma_keys->dk_nentries; i++) {
         PyObject *key, *aval;
@@ -3191,8 +3839,11 @@ dict_equal(PyDictObject *a, PyDictObject *b)
             if (bval == NULL) {
                 Py_DECREF(key);
                 Py_DECREF(aval);
-                if (PyErr_Occurred())
+                if (PyErr_Occurred()) {
+                    dict_metrics[86].total_time += elapsed(start);
                     return -1;
+                }
+                dict_metrics[86].total_time += elapsed(start);
                 return 0;
             }
             Py_INCREF(bval);
@@ -3200,16 +3851,22 @@ dict_equal(PyDictObject *a, PyDictObject *b)
             Py_DECREF(key);
             Py_DECREF(aval);
             Py_DECREF(bval);
-            if (cmp <= 0)  /* error or not equal */
+            if (cmp <= 0) {  /* error or not equal */
+                dict_metrics[86].total_time += elapsed(start);
                 return cmp;
+            }
         }
     }
+    dict_metrics[86].total_time += elapsed(start);
     return 1;
 }
 
 static PyObject *
 dict_richcompare(PyObject *v, PyObject *w, int op)
 {
+    dict_metrics[87].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     int cmp;
     PyObject *res;
 
@@ -3218,13 +3875,16 @@ dict_richcompare(PyObject *v, PyObject *w, int op)
     }
     else if (op == Py_EQ || op == Py_NE) {
         cmp = dict_equal((PyDictObject *)v, (PyDictObject *)w);
-        if (cmp < 0)
+        if (cmp < 0) {
+            dict_metrics[87].total_time += elapsed(start);
             return NULL;
+        }
         res = (cmp == (op == Py_EQ)) ? Py_True : Py_False;
     }
     else
         res = Py_NotImplemented;
     Py_INCREF(res);
+    dict_metrics[87].total_time += elapsed(start);
     return res;
 }
 
@@ -3243,6 +3903,9 @@ static PyObject *
 dict___contains__(PyDictObject *self, PyObject *key)
 /*[clinic end generated code: output=a3d03db709ed6e6b input=fe1cb42ad831e820]*/
 {
+    dict_metrics[88].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     register PyDictObject *mp = self;
     Py_hash_t hash;
     Py_ssize_t ix;
@@ -3250,14 +3913,21 @@ dict___contains__(PyDictObject *self, PyObject *key)
 
     if (!PyUnicode_CheckExact(key) || (hash = unicode_get_hash(key)) == -1) {
         hash = PyObject_Hash(key);
-        if (hash == -1)
+        if (hash == -1) {
+            dict_metrics[88].total_time += elapsed(start);
             return NULL;
+        }
     }
     ix = _Py_dict_lookup(mp, key, hash, &value);
-    if (ix == DKIX_ERROR)
+    if (ix == DKIX_ERROR) {
+        dict_metrics[88].total_time += elapsed(start);
         return NULL;
-    if (ix == DKIX_EMPTY || value == NULL)
+    }
+    if (ix == DKIX_EMPTY || value == NULL) {
+        dict_metrics[88].total_time += elapsed(start);
         Py_RETURN_FALSE;
+    }
+    dict_metrics[88].total_time += elapsed(start);
     Py_RETURN_TRUE;
 }
 
@@ -3275,67 +3945,88 @@ static PyObject *
 dict_get_impl(PyDictObject *self, PyObject *key, PyObject *default_value)
 /*[clinic end generated code: output=bba707729dee05bf input=279ddb5790b6b107]*/
 {
+    dict_metrics[89].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *val = NULL;
     Py_hash_t hash;
     Py_ssize_t ix;
 
     if (!PyUnicode_CheckExact(key) || (hash = unicode_get_hash(key)) == -1) {
         hash = PyObject_Hash(key);
-        if (hash == -1)
+        if (hash == -1) {
+            dict_metrics[89].total_time += elapsed(start);
             return NULL;
+        }
     }
     ix = _Py_dict_lookup(self, key, hash, &val);
-    if (ix == DKIX_ERROR)
+    if (ix == DKIX_ERROR) {
+        dict_metrics[89].total_time += elapsed(start);
         return NULL;
+    }
     if (ix == DKIX_EMPTY || val == NULL) {
         val = default_value;
     }
     Py_INCREF(val);
+    dict_metrics[89].total_time += elapsed(start);
+    dict_metrics[89].extra_1 += 1;
     return val;
 }
 
 PyObject *
 PyDict_SetDefault(PyObject *d, PyObject *key, PyObject *defaultobj)
 {
+    dict_metrics[90].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictObject *mp = (PyDictObject *)d;
     PyObject *value;
     Py_hash_t hash;
 
     if (!PyDict_Check(d)) {
         PyErr_BadInternalCall();
+        dict_metrics[90].total_time += elapsed(start);
         return NULL;
     }
 
     if (!PyUnicode_CheckExact(key) || (hash = unicode_get_hash(key)) == -1) {
         hash = PyObject_Hash(key);
-        if (hash == -1)
+        if (hash == -1) {
+            dict_metrics[90].total_time += elapsed(start);
             return NULL;
+        }
     }
 
     if (mp->ma_keys == Py_EMPTY_KEYS) {
         Py_INCREF(key);
         Py_INCREF(defaultobj);
         if (insert_to_emptydict(mp, key, hash, defaultobj) < 0) {
+            dict_metrics[90].total_time += elapsed(start);
             return NULL;
         }
+        dict_metrics[90].total_time += elapsed(start);
         return defaultobj;
     }
 
     if (!PyUnicode_CheckExact(key) && DK_IS_UNICODE(mp->ma_keys)) {
         if (insertion_resize(mp, 0) < 0) {
+            dict_metrics[90].total_time += elapsed(start);
             return NULL;
         }
     }
 
     Py_ssize_t ix = _Py_dict_lookup(mp, key, hash, &value);
-    if (ix == DKIX_ERROR)
+    if (ix == DKIX_ERROR) {
+        dict_metrics[90].total_time += elapsed(start);
         return NULL;
+    }
 
     if (ix == DKIX_EMPTY) {
         mp->ma_keys->dk_version = 0;
         value = defaultobj;
         if (mp->ma_keys->dk_usable <= 0) {
             if (insertion_resize(mp, 1) < 0) {
+                dict_metrics[90].total_time += elapsed(start);
                 return NULL;
             }
         }
@@ -3384,6 +4075,7 @@ PyDict_SetDefault(PyObject *d, PyObject *key, PyObject *defaultobj)
     }
 
     ASSERT_CONSISTENT(mp);
+    dict_metrics[90].total_time += elapsed(start);
     return value;
 }
 
@@ -3404,17 +4096,25 @@ dict_setdefault_impl(PyDictObject *self, PyObject *key,
                      PyObject *default_value)
 /*[clinic end generated code: output=f8c1101ebf69e220 input=0f063756e815fd9d]*/
 {
+    dict_metrics[91].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *val;
 
     val = PyDict_SetDefault((PyObject *)self, key, default_value);
     Py_XINCREF(val);
+    dict_metrics[91].total_time += elapsed(start);
     return val;
 }
 
 static PyObject *
 dict_clear(PyDictObject *mp, PyObject *Py_UNUSED(ignored))
 {
+    dict_metrics[92].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDict_Clear((PyObject *)mp);
+    dict_metrics[92].total_time += elapsed(start);
     Py_RETURN_NONE;
 }
 
@@ -3435,7 +4135,12 @@ static PyObject *
 dict_pop_impl(PyDictObject *self, PyObject *key, PyObject *default_value)
 /*[clinic end generated code: output=3abb47b89f24c21c input=e221baa01044c44c]*/
 {
-    return _PyDict_Pop((PyObject*)self, key, default_value);
+    dict_metrics[93].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    PyObject *ret = _PyDict_Pop((PyObject*)self, key, default_value);
+    dict_metrics[93].total_time += elapsed(start);
+    return ret;
 }
 
 /*[clinic input]
@@ -3451,6 +4156,9 @@ static PyObject *
 dict_popitem_impl(PyDictObject *self)
 /*[clinic end generated code: output=e65fcb04420d230d input=1c38a49f21f64941]*/
 {
+    dict_metrics[94].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t i, j;
     PyObject *res;
 
@@ -3464,17 +4172,21 @@ dict_popitem_impl(PyDictObject *self)
      * inefficiency -- possible, but unlikely in practice.
      */
     res = PyTuple_New(2);
-    if (res == NULL)
+    if (res == NULL) {
+        dict_metrics[94].total_time += elapsed(start);
         return NULL;
+    }
     if (self->ma_used == 0) {
         Py_DECREF(res);
         PyErr_SetString(PyExc_KeyError, "popitem(): dictionary is empty");
+        dict_metrics[94].total_time += elapsed(start);
         return NULL;
     }
     /* Convert split table to combined table */
     if (self->ma_keys->dk_kind == DICT_KEYS_SPLIT) {
         if (dictresize(self, DK_LOG_SIZE(self->ma_keys), 1)) {
             Py_DECREF(res);
+            dict_metrics[94].total_time += elapsed(start);
             return NULL;
         }
     }
@@ -3525,12 +4237,16 @@ dict_popitem_impl(PyDictObject *self)
     self->ma_used--;
     self->ma_version_tag = DICT_NEXT_VERSION();
     ASSERT_CONSISTENT(self);
+    dict_metrics[94].total_time += elapsed(start);
     return res;
 }
 
 static int
 dict_traverse(PyObject *op, visitproc visit, void *arg)
 {
+    dict_metrics[95].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictObject *mp = (PyDictObject *)op;
     PyDictKeysObject *keys = mp->ma_keys;
     Py_ssize_t i, n = keys->dk_nentries;
@@ -3557,13 +4273,18 @@ dict_traverse(PyObject *op, visitproc visit, void *arg)
             }
         }
     }
+    dict_metrics[95].total_time += elapsed(start);
     return 0;
 }
 
 static int
 dict_tp_clear(PyObject *op)
 {
+    dict_metrics[96].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDict_Clear(op);
+    dict_metrics[96].total_time += elapsed(start);
     return 0;
 }
 
@@ -3572,6 +4293,9 @@ static PyObject *dictiter_new(PyDictObject *, PyTypeObject *);
 Py_ssize_t
 _PyDict_SizeOf(PyDictObject *mp)
 {
+    dict_metrics[97].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t res;
 
     res = _PyObject_SIZE(Py_TYPE(mp));
@@ -3583,49 +4307,84 @@ _PyDict_SizeOf(PyDictObject *mp)
     if (mp->ma_keys->dk_refcnt == 1) {
         res += _PyDict_KeysSize(mp->ma_keys);
     }
+    dict_metrics[97].total_time += elapsed(start);
+    if (dict_metrics[97].usages == 1) {
+        dict_metrics[97].extra_1 = res;
+    }
+    dict_metrics[97].extra_1 = (dict_metrics[97].extra_1 + res) / 2;
     return res;
 }
 
 Py_ssize_t
 _PyDict_KeysSize(PyDictKeysObject *keys)
 {
+    dict_metrics[98].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     size_t es = keys->dk_kind == DICT_KEYS_GENERAL
         ?  sizeof(PyDictKeyEntry) : sizeof(PyDictUnicodeEntry);
-    return (sizeof(PyDictKeysObject)
+    Py_ssize_t ret = (sizeof(PyDictKeysObject)
             + ((size_t)1 << keys->dk_log2_index_bytes)
             + USABLE_FRACTION(DK_SIZE(keys)) * es);
+    dict_metrics[98].total_time += elapsed(start);
+    if (dict_metrics[98].usages == 1) {
+        dict_metrics[98].extra_1 = ret;
+    }
+    dict_metrics[98].extra_1 = (dict_metrics[98].extra_1 + ret) / 2;
+    return ret;
 }
 
 static PyObject *
 dict_sizeof(PyDictObject *mp, PyObject *Py_UNUSED(ignored))
 {
-    return PyLong_FromSsize_t(_PyDict_SizeOf(mp));
+    dict_metrics[99].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    PyObject *ret = PyLong_FromSsize_t(_PyDict_SizeOf(mp));
+    dict_metrics[99].total_time += elapsed(start);
+    if (dict_metrics[99].usages == 1) {
+        dict_metrics[99].extra_1 = PyLong_AsLong(ret);
+    }
+    dict_metrics[99].extra_1 = (dict_metrics[99].extra_1 + PyLong_AsLong(ret)) / 2;
+    return ret;
 }
 
 static PyObject *
 dict_or(PyObject *self, PyObject *other)
 {
+    dict_metrics[100].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (!PyDict_Check(self) || !PyDict_Check(other)) {
+        dict_metrics[100].total_time += elapsed(start);
         Py_RETURN_NOTIMPLEMENTED;
     }
     PyObject *new = PyDict_Copy(self);
     if (new == NULL) {
+        dict_metrics[100].total_time += elapsed(start);
         return NULL;
     }
     if (dict_update_arg(new, other)) {
         Py_DECREF(new);
+        dict_metrics[100].total_time += elapsed(start);
         return NULL;
     }
+    dict_metrics[100].total_time += elapsed(start);
     return new;
 }
 
 static PyObject *
 dict_ior(PyObject *self, PyObject *other)
 {
+    dict_metrics[101].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (dict_update_arg(self, other)) {
+        dict_metrics[101].total_time += elapsed(start);
         return NULL;
     }
     Py_INCREF(self);
+    dict_metrics[101].total_time += elapsed(start);
     return self;
 }
 
@@ -3690,6 +4449,9 @@ static PyMethodDef mapp_methods[] = {
 int
 PyDict_Contains(PyObject *op, PyObject *key)
 {
+    dict_metrics[102].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_hash_t hash;
     Py_ssize_t ix;
     PyDictObject *mp = (PyDictObject *)op;
@@ -3697,37 +4459,61 @@ PyDict_Contains(PyObject *op, PyObject *key)
 
     if (!PyUnicode_CheckExact(key) || (hash = unicode_get_hash(key)) == -1) {
         hash = PyObject_Hash(key);
-        if (hash == -1)
+        if (hash == -1) {
+            dict_metrics[102].total_time += elapsed(start);
             return -1;
+        }
     }
     ix = _Py_dict_lookup(mp, key, hash, &value);
-    if (ix == DKIX_ERROR)
+    if (ix == DKIX_ERROR) {
+        dict_metrics[102].total_time += elapsed(start);
         return -1;
-    return (ix != DKIX_EMPTY && value != NULL);
+    }
+    int ret = (ix != DKIX_EMPTY && value != NULL);
+    dict_metrics[102].total_time += elapsed(start);
+    if (ret) {
+        dict_metrics[102].extra_1++;
+    } else {
+        dict_metrics[102].extra_2++;
+    }
+    return ret;
 }
 
 /* Internal version of PyDict_Contains used when the hash value is already known */
 int
 _PyDict_Contains_KnownHash(PyObject *op, PyObject *key, Py_hash_t hash)
 {
+    dict_metrics[103].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictObject *mp = (PyDictObject *)op;
     PyObject *value;
     Py_ssize_t ix;
 
     ix = _Py_dict_lookup(mp, key, hash, &value);
-    if (ix == DKIX_ERROR)
+    if (ix == DKIX_ERROR) {
+        dict_metrics[103].total_time += elapsed(start);
         return -1;
-    return (ix != DKIX_EMPTY && value != NULL);
+    }
+    int ret = (ix != DKIX_EMPTY && value != NULL);
+    dict_metrics[103].total_time += elapsed(start);
+    return ret;
 }
 
 int
 _PyDict_ContainsId(PyObject *op, _Py_Identifier *key)
 {
+    dict_metrics[104].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *kv = _PyUnicode_FromId(key); /* borrowed */
     if (kv == NULL) {
+        dict_metrics[104].total_time += elapsed(start);
         return -1;
     }
-    return PyDict_Contains(op, kv);
+    int ret = PyDict_Contains(op, kv);
+    dict_metrics[104].total_time += elapsed(start);
+    return ret;
 }
 
 /* Hack to implement "key in dict" */
@@ -3752,6 +4538,9 @@ static PyNumberMethods dict_as_number = {
 static PyObject *
 dict_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
+    dict_metrics[105].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(type != NULL);
     assert(type->tp_alloc != NULL);
     // dict subclasses must implement the GC protocol
@@ -3759,6 +4548,7 @@ dict_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 
     PyObject *self = type->tp_alloc(type, 0);
     if (self == NULL) {
+        dict_metrics[105].total_time += elapsed(start);
         return NULL;
     }
     PyDictObject *d = (PyDictObject *)self;
@@ -3780,31 +4570,43 @@ dict_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
         // _PyType_AllocNoTrack() does not track the created object
         assert(!_PyObject_GC_IS_TRACKED(d));
     }
+    dict_metrics[105].total_time += elapsed(start);
     return self;
 }
 
 static int
 dict_init(PyObject *self, PyObject *args, PyObject *kwds)
 {
-    return dict_update_common(self, args, kwds, "dict");
+    dict_metrics[106].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    int ret = dict_update_common(self, args, kwds, "dict");
+    dict_metrics[106].total_time += elapsed(start);
+    return ret;
 }
 
 static PyObject *
 dict_vectorcall(PyObject *type, PyObject * const*args,
                 size_t nargsf, PyObject *kwnames)
 {
+    dict_metrics[107].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t nargs = PyVectorcall_NARGS(nargsf);
     if (!_PyArg_CheckPositional("dict", nargs, 0, 1)) {
+        dict_metrics[107].total_time += elapsed(start);
         return NULL;
     }
 
     PyObject *self = dict_new(_PyType_CAST(type), NULL, NULL);
     if (self == NULL) {
+        dict_metrics[107].total_time += elapsed(start);
         return NULL;
     }
     if (nargs == 1) {
         if (dict_update_arg(self, args[0]) < 0) {
             Py_DECREF(self);
+            dict_metrics[107].total_time += elapsed(start);
             return NULL;
         }
         args++;
@@ -3813,17 +4615,24 @@ dict_vectorcall(PyObject *type, PyObject * const*args,
         for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(kwnames); i++) {
             if (PyDict_SetItem(self, PyTuple_GET_ITEM(kwnames, i), args[i]) < 0) {
                 Py_DECREF(self);
+                dict_metrics[107].total_time += elapsed(start);
                 return NULL;
             }
         }
     }
+    dict_metrics[107].total_time += elapsed(start);
     return self;
 }
 
 static PyObject *
 dict_iter(PyDictObject *dict)
 {
-    return dictiter_new(dict, &PyDictIterKey_Type);
+    dict_metrics[1].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    PyObject *ret = dictiter_new(dict, &PyDictIterKey_Type);
+    dict_metrics[1].total_time += elapsed(start);
+    return ret;
 }
 
 PyDoc_STRVAR(dictionary_doc,
@@ -3887,60 +4696,91 @@ PyTypeObject PyDict_Type = {
 PyObject *
 PyDict_GetItemString(PyObject *v, const char *key)
 {
+    dict_metrics[159].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *kv, *rv;
     kv = PyUnicode_FromString(key);
     if (kv == NULL) {
         PyErr_Clear();
+    dict_metrics[159].total_time += elapsed(start);
         return NULL;
     }
     rv = PyDict_GetItem(v, kv);
     Py_DECREF(kv);
+    dict_metrics[159].total_time += elapsed(start);
     return rv;
 }
 
 int
 _PyDict_SetItemId(PyObject *v, _Py_Identifier *key, PyObject *item)
 {
+    dict_metrics[160].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *kv;
     kv = _PyUnicode_FromId(key); /* borrowed */
-    if (kv == NULL)
+    if (kv == NULL) {
+        dict_metrics[160].total_time += elapsed(start);
         return -1;
-    return PyDict_SetItem(v, kv, item);
+    }
+    int ret = PyDict_SetItem(v, kv, item);
+    dict_metrics[160].total_time += elapsed(start);
+    return ret;
 }
 
 int
 PyDict_SetItemString(PyObject *v, const char *key, PyObject *item)
 {
+    dict_metrics[161].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *kv;
     int err;
     kv = PyUnicode_FromString(key);
-    if (kv == NULL)
+    if (kv == NULL) {
+        dict_metrics[161].total_time += elapsed(start);
         return -1;
+    }
     PyUnicode_InternInPlace(&kv); /* XXX Should we really? */
     err = PyDict_SetItem(v, kv, item);
     Py_DECREF(kv);
+    dict_metrics[161].total_time += elapsed(start);
     return err;
 }
 
 int
 _PyDict_DelItemId(PyObject *v, _Py_Identifier *key)
 {
+    dict_metrics[162].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *kv = _PyUnicode_FromId(key); /* borrowed */
-    if (kv == NULL)
+    if (kv == NULL) {
+        dict_metrics[162].total_time += elapsed(start);
         return -1;
-    return PyDict_DelItem(v, kv);
+    }
+    int ret = PyDict_DelItem(v, kv);
+    dict_metrics[162].total_time += elapsed(start);
+    return ret;
 }
 
 int
 PyDict_DelItemString(PyObject *v, const char *key)
 {
+    dict_metrics[163].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *kv;
     int err;
     kv = PyUnicode_FromString(key);
-    if (kv == NULL)
+    if (kv == NULL) {
+        dict_metrics[163].total_time += elapsed(start);
         return -1;
+    }
     err = PyDict_DelItem(v, kv);
     Py_DECREF(kv);
+    dict_metrics[163].total_time += elapsed(start);
     return err;
 }
 
@@ -3958,9 +4798,13 @@ typedef struct {
 static PyObject *
 dictiter_new(PyDictObject *dict, PyTypeObject *itertype)
 {
+    dict_metrics[108].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     dictiterobject *di;
     di = PyObject_GC_New(dictiterobject, itertype);
     if (di == NULL) {
+        dict_metrics[108].total_time += elapsed(start);
         return NULL;
     }
     Py_INCREF(dict);
@@ -3985,6 +4829,7 @@ dictiter_new(PyDictObject *dict, PyTypeObject *itertype)
         di->di_result = PyTuple_Pack(2, Py_None, Py_None);
         if (di->di_result == NULL) {
             Py_DECREF(di);
+            dict_metrics[108].total_time += elapsed(start);
             return NULL;
         }
     }
@@ -3992,34 +4837,48 @@ dictiter_new(PyDictObject *dict, PyTypeObject *itertype)
         di->di_result = NULL;
     }
     _PyObject_GC_TRACK(di);
+    dict_metrics[108].total_time += elapsed(start);
     return (PyObject *)di;
 }
 
 static void
 dictiter_dealloc(dictiterobject *di)
 {
+    dict_metrics[109].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     /* bpo-31095: UnTrack is needed before calling any callbacks */
     _PyObject_GC_UNTRACK(di);
     Py_XDECREF(di->di_dict);
     Py_XDECREF(di->di_result);
     PyObject_GC_Del(di);
+    dict_metrics[109].total_time += elapsed(start);
 }
 
 static int
 dictiter_traverse(dictiterobject *di, visitproc visit, void *arg)
 {
+    dict_metrics[110].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_VISIT(di->di_dict);
     Py_VISIT(di->di_result);
+    dict_metrics[110].total_time += elapsed(start);
     return 0;
 }
 
 static PyObject *
 dictiter_len(dictiterobject *di, PyObject *Py_UNUSED(ignored))
 {
+    dict_metrics[111].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t len = 0;
     if (di->di_dict != NULL && di->di_used == di->di_dict->ma_used)
         len = di->len;
-    return PyLong_FromSize_t(len);
+    PyObject *ret = PyLong_FromSize_t(len);
+    dict_metrics[111].total_time += elapsed(start);
+    return ret;
 }
 
 PyDoc_STRVAR(length_hint_doc,
@@ -4041,19 +4900,25 @@ static PyMethodDef dictiter_methods[] = {
 static PyObject*
 dictiter_iternextkey(dictiterobject *di)
 {
+    dict_metrics[113].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *key;
     Py_ssize_t i;
     PyDictKeysObject *k;
     PyDictObject *d = di->di_dict;
 
-    if (d == NULL)
+    if (d == NULL) {
+        dict_metrics[113].total_time += elapsed(start);
         return NULL;
+    }
     assert (PyDict_Check(d));
 
     if (di->di_used != d->ma_used) {
         PyErr_SetString(PyExc_RuntimeError,
                         "dictionary changed size during iteration");
         di->di_used = -1; /* Make this state sticky */
+        dict_metrics[113].total_time += elapsed(start);
         return NULL;
     }
 
@@ -4099,11 +4964,13 @@ dictiter_iternextkey(dictiterobject *di)
     di->di_pos = i+1;
     di->len--;
     Py_INCREF(key);
+    dict_metrics[113].total_time += elapsed(start);
     return key;
 
 fail:
     di->di_dict = NULL;
     Py_DECREF(d);
+    dict_metrics[113].total_time += elapsed(start);
     return NULL;
 }
 
@@ -4143,18 +5010,24 @@ PyTypeObject PyDictIterKey_Type = {
 static PyObject *
 dictiter_iternextvalue(dictiterobject *di)
 {
+    dict_metrics[114].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *value;
     Py_ssize_t i;
     PyDictObject *d = di->di_dict;
 
-    if (d == NULL)
+    if (d == NULL) {
+        dict_metrics[114].total_time += elapsed(start);
         return NULL;
+    }
     assert (PyDict_Check(d));
 
     if (di->di_used != d->ma_used) {
         PyErr_SetString(PyExc_RuntimeError,
                         "dictionary changed size during iteration");
         di->di_used = -1; /* Make this state sticky */
+        dict_metrics[114].total_time += elapsed(start);
         return NULL;
     }
 
@@ -4199,11 +5072,13 @@ dictiter_iternextvalue(dictiterobject *di)
     di->di_pos = i+1;
     di->len--;
     Py_INCREF(value);
+    dict_metrics[114].total_time += elapsed(start);
     return value;
 
 fail:
     di->di_dict = NULL;
     Py_DECREF(d);
+    dict_metrics[114].total_time += elapsed(start);
     return NULL;
 }
 
@@ -4243,18 +5118,24 @@ PyTypeObject PyDictIterValue_Type = {
 static PyObject *
 dictiter_iternextitem(dictiterobject *di)
 {
+    dict_metrics[115].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *key, *value, *result;
     Py_ssize_t i;
     PyDictObject *d = di->di_dict;
 
-    if (d == NULL)
+    if (d == NULL) {
+        dict_metrics[115].total_time += elapsed(start);
         return NULL;
+    }
     assert (PyDict_Check(d));
 
     if (di->di_used != d->ma_used) {
         PyErr_SetString(PyExc_RuntimeError,
                         "dictionary changed size during iteration");
         di->di_used = -1; /* Make this state sticky */
+        dict_metrics[115].total_time += elapsed(start);
         return NULL;
     }
 
@@ -4320,16 +5201,20 @@ dictiter_iternextitem(dictiterobject *di)
     }
     else {
         result = PyTuple_New(2);
-        if (result == NULL)
+        if (result == NULL) {
+            dict_metrics[115].total_time += elapsed(start);
             return NULL;
+        }
         PyTuple_SET_ITEM(result, 0, key);  /* steals reference */
         PyTuple_SET_ITEM(result, 1, value);  /* steals reference */
     }
+    dict_metrics[115].total_time += elapsed(start);
     return result;
 
 fail:
     di->di_dict = NULL;
     Py_DECREF(d);
+    dict_metrics[115].total_time += elapsed(start);
     return NULL;
 }
 
@@ -4372,9 +5257,13 @@ PyTypeObject PyDictIterItem_Type = {
 static PyObject *
 dictreviter_iternext(dictiterobject *di)
 {
+    dict_metrics[116].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictObject *d = di->di_dict;
 
     if (d == NULL) {
+        dict_metrics[116].total_time += elapsed(start);
         return NULL;
     }
     assert (PyDict_Check(d));
@@ -4383,6 +5272,7 @@ dictreviter_iternext(dictiterobject *di)
         PyErr_SetString(PyExc_RuntimeError,
                          "dictionary changed size during iteration");
         di->di_used = -1; /* Make this state sticky */
+        dict_metrics[116].total_time += elapsed(start);
         return NULL;
     }
 
@@ -4428,10 +5318,12 @@ dictreviter_iternext(dictiterobject *di)
 
     if (Py_IS_TYPE(di, &PyDictRevIterKey_Type)) {
         Py_INCREF(key);
+        dict_metrics[116].total_time += elapsed(start);
         return key;
     }
     else if (Py_IS_TYPE(di, &PyDictRevIterValue_Type)) {
         Py_INCREF(value);
+        dict_metrics[116].total_time += elapsed(start);
         return value;
     }
     else if (Py_IS_TYPE(di, &PyDictRevIterItem_Type)) {
@@ -4455,11 +5347,13 @@ dictreviter_iternext(dictiterobject *di)
         else {
             result = PyTuple_New(2);
             if (result == NULL) {
+                dict_metrics[116].total_time += elapsed(start);
                 return NULL;
             }
             PyTuple_SET_ITEM(result, 0, key); /* steals reference */
             PyTuple_SET_ITEM(result, 1, value); /* steals reference */
         }
+        dict_metrics[116].total_time += elapsed(start);
         return result;
     }
     else {
@@ -4469,6 +5363,7 @@ dictreviter_iternext(dictiterobject *di)
 fail:
     di->di_dict = NULL;
     Py_DECREF(d);
+    dict_metrics[116].total_time += elapsed(start);
     return NULL;
 }
 
@@ -4495,13 +5390,21 @@ static PyObject *
 dict___reversed___impl(PyDictObject *self)
 /*[clinic end generated code: output=e674483336d1ed51 input=23210ef3477d8c4d]*/
 {
+    dict_metrics[117].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert (PyDict_Check(self));
-    return dictiter_new(self, &PyDictRevIterKey_Type);
+    PyObject *ret = dictiter_new(self, &PyDictRevIterKey_Type);
+    dict_metrics[117].total_time += elapsed(start);
+    return ret;
 }
 
 static PyObject *
 dictiter_reduce(dictiterobject *di, PyObject *Py_UNUSED(ignored))
 {
+    dict_metrics[112].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     /* copy the iterator state */
     dictiterobject tmp = *di;
     Py_XINCREF(tmp.di_dict);
@@ -4509,9 +5412,12 @@ dictiter_reduce(dictiterobject *di, PyObject *Py_UNUSED(ignored))
     PyObject *list = PySequence_List((PyObject*)&tmp);
     Py_XDECREF(tmp.di_dict);
     if (list == NULL) {
+        dict_metrics[112].total_time += elapsed(start);
         return NULL;
     }
-    return Py_BuildValue("N(N)", _PyEval_GetBuiltin(&_Py_ID(iter)), list);
+    PyObject *ret = Py_BuildValue("N(N)", _PyEval_GetBuiltin(&_Py_ID(iter)), list);
+    dict_metrics[112].total_time += elapsed(start);
+    return ret;
 }
 
 PyTypeObject PyDictRevIterItem_Type = {
@@ -4547,34 +5453,50 @@ PyTypeObject PyDictRevIterValue_Type = {
 static void
 dictview_dealloc(_PyDictViewObject *dv)
 {
+    dict_metrics[118].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     /* bpo-31095: UnTrack is needed before calling any callbacks */
     _PyObject_GC_UNTRACK(dv);
     Py_XDECREF(dv->dv_dict);
     PyObject_GC_Del(dv);
+    dict_metrics[118].total_time += elapsed(start);
 }
 
 static int
 dictview_traverse(_PyDictViewObject *dv, visitproc visit, void *arg)
 {
+    dict_metrics[119].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_VISIT(dv->dv_dict);
+    dict_metrics[119].total_time += elapsed(start);
     return 0;
 }
 
 static Py_ssize_t
 dictview_len(_PyDictViewObject *dv)
 {
+    dict_metrics[120].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t len = 0;
     if (dv->dv_dict != NULL)
         len = dv->dv_dict->ma_used;
+    dict_metrics[120].total_time += elapsed(start);
     return len;
 }
 
 PyObject *
 _PyDictView_New(PyObject *dict, PyTypeObject *type)
 {
+    dict_metrics[121].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     _PyDictViewObject *dv;
     if (dict == NULL) {
         PyErr_BadInternalCall();
+        dict_metrics[121].total_time += elapsed(start);
         return NULL;
     }
     if (!PyDict_Check(dict)) {
@@ -4582,25 +5504,34 @@ _PyDictView_New(PyObject *dict, PyTypeObject *type)
         PyErr_Format(PyExc_TypeError,
                      "%s() requires a dict argument, not '%s'",
                      type->tp_name, Py_TYPE(dict)->tp_name);
+        dict_metrics[121].total_time += elapsed(start);
         return NULL;
     }
     dv = PyObject_GC_New(_PyDictViewObject, type);
-    if (dv == NULL)
+    if (dv == NULL) {
+        dict_metrics[121].total_time += elapsed(start);
         return NULL;
+    }
     Py_INCREF(dict);
     dv->dv_dict = (PyDictObject *)dict;
     _PyObject_GC_TRACK(dv);
+    dict_metrics[121].total_time += elapsed(start);
     return (PyObject *)dv;
 }
 
 static PyObject *
 dictview_mapping(PyObject *view, void *Py_UNUSED(ignored)) {
+    dict_metrics[122].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(view != NULL);
     assert(PyDictKeys_Check(view)
            || PyDictValues_Check(view)
            || PyDictItems_Check(view));
     PyObject *mapping = (PyObject *)((_PyDictViewObject *)view)->dv_dict;
-    return PyDictProxy_New(mapping);
+    PyObject *ret = PyDictProxy_New(mapping);
+    dict_metrics[122].total_time += elapsed(start);
+    return ret;
 }
 
 static PyGetSetDef dictview_getset[] = {
@@ -4622,11 +5553,16 @@ static PyGetSetDef dictview_getset[] = {
 static int
 all_contained_in(PyObject *self, PyObject *other)
 {
+    dict_metrics[123].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *iter = PyObject_GetIter(self);
     int ok = 1;
 
-    if (iter == NULL)
+    if (iter == NULL) {
+        dict_metrics[123].total_time += elapsed(start);
         return -1;
+    }
     for (;;) {
         PyObject *next = PyIter_Next(iter);
         if (next == NULL) {
@@ -4640,12 +5576,16 @@ all_contained_in(PyObject *self, PyObject *other)
             break;
     }
     Py_DECREF(iter);
+    dict_metrics[123].total_time += elapsed(start);
     return ok;
 }
 
 static PyObject *
 dictview_richcompare(PyObject *self, PyObject *other, int op)
 {
+    dict_metrics[124].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     Py_ssize_t len_self, len_other;
     int ok;
     PyObject *result;
@@ -4654,15 +5594,21 @@ dictview_richcompare(PyObject *self, PyObject *other, int op)
     assert(PyDictViewSet_Check(self));
     assert(other != NULL);
 
-    if (!PyAnySet_Check(other) && !PyDictViewSet_Check(other))
+    if (!PyAnySet_Check(other) && !PyDictViewSet_Check(other)) {
+        dict_metrics[124].total_time += elapsed(start);
         Py_RETURN_NOTIMPLEMENTED;
+    }
 
     len_self = PyObject_Size(self);
-    if (len_self < 0)
+    if (len_self < 0) {
+        dict_metrics[124].total_time += elapsed(start);
         return NULL;
+    }
     len_other = PyObject_Size(other);
-    if (len_other < 0)
+    if (len_other < 0) {
+        dict_metrics[124].total_time += elapsed(start);
         return NULL;
+    }
 
     ok = 0;
     switch(op) {
@@ -4696,23 +5642,31 @@ dictview_richcompare(PyObject *self, PyObject *other, int op)
         break;
 
     }
-    if (ok < 0)
+    if (ok < 0) {
+        dict_metrics[124].total_time += elapsed(start);
         return NULL;
+    }
     result = ok ? Py_True : Py_False;
     Py_INCREF(result);
+    dict_metrics[124].total_time += elapsed(start);
     return result;
 }
 
 static PyObject *
 dictview_repr(_PyDictViewObject *dv)
 {
+    dict_metrics[125].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *seq;
     PyObject *result = NULL;
     Py_ssize_t rc;
 
     rc = Py_ReprEnter((PyObject *)dv);
     if (rc != 0) {
-        return rc > 0 ? PyUnicode_FromString("...") : NULL;
+        PyObject *ret = rc > 0 ? PyUnicode_FromString("...") : NULL;
+        dict_metrics[125].total_time += elapsed(start);
+        return ret;
     }
     seq = PySequence_List((PyObject *)dv);
     if (seq == NULL) {
@@ -4723,6 +5677,7 @@ dictview_repr(_PyDictViewObject *dv)
 
 Done:
     Py_ReprLeave((PyObject *)dv);
+    dict_metrics[125].total_time += elapsed(start);
     return result;
 }
 
@@ -4731,18 +5686,31 @@ Done:
 static PyObject *
 dictkeys_iter(_PyDictViewObject *dv)
 {
+    dict_metrics[126].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (dv->dv_dict == NULL) {
+        dict_metrics[126].total_time += elapsed(start);
         Py_RETURN_NONE;
     }
-    return dictiter_new(dv->dv_dict, &PyDictIterKey_Type);
+    PyObject *ret = dictiter_new(dv->dv_dict, &PyDictIterKey_Type);
+    dict_metrics[126].total_time += elapsed(start);
+    return ret;
 }
 
 static int
 dictkeys_contains(_PyDictViewObject *dv, PyObject *obj)
 {
-    if (dv->dv_dict == NULL)
+    dict_metrics[127].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    if (dv->dv_dict == NULL) {
+        dict_metrics[127].total_time += elapsed(start);
         return 0;
-    return PyDict_Contains((PyObject *)dv->dv_dict, obj);
+    }
+    int ret = PyDict_Contains((PyObject *)dv->dv_dict, obj);
+    dict_metrics[127].total_time += elapsed(start);
+    return ret;
 }
 
 static PySequenceMethods dictkeys_as_sequence = {
@@ -4762,6 +5730,9 @@ static PySequenceMethods dictkeys_as_sequence = {
 static PyObject*
 dictviews_to_set(PyObject *self)
 {
+    dict_metrics[128].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *left = self;
     if (PyDictKeys_Check(self)) {
         // PySet_New() has fast path for the dict object.
@@ -4770,14 +5741,20 @@ dictviews_to_set(PyObject *self)
             left = dict;
         }
     }
-    return PySet_New(left);
+    PyObject *ret = PySet_New(left);
+    dict_metrics[128].total_time += elapsed(start);
+    return ret;
 }
 
 static PyObject*
 dictviews_sub(PyObject *self, PyObject *other)
 {
+    dict_metrics[129].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *result = dictviews_to_set(self);
     if (result == NULL) {
+        dict_metrics[129].total_time += elapsed(start);
         return NULL;
     }
 
@@ -4785,10 +5762,12 @@ dictviews_sub(PyObject *self, PyObject *other)
             result, &_Py_ID(difference_update), other);
     if (tmp == NULL) {
         Py_DECREF(result);
+        dict_metrics[129].total_time += elapsed(start);
         return NULL;
     }
 
     Py_DECREF(tmp);
+    dict_metrics[129].total_time += elapsed(start);
     return result;
 }
 
@@ -4798,6 +5777,9 @@ dictitems_contains(_PyDictViewObject *dv, PyObject *obj);
 PyObject *
 _PyDictView_Intersect(PyObject* self, PyObject *other)
 {
+    dict_metrics[131].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *result;
     PyObject *it;
     PyObject *key;
@@ -4818,8 +5800,10 @@ _PyDictView_Intersect(PyObject* self, PyObject *other)
     /* if other is a set and self is smaller than other,
        reuse set intersection logic */
     if (PySet_CheckExact(other) && len_self <= PyObject_Size(other)) {
-        return PyObject_CallMethodObjArgs(
+        PyObject *ret = PyObject_CallMethodObjArgs(
                 other, &_Py_ID(intersection), self, NULL);
+        dict_metrics[131].total_time += elapsed(start);
+        return ret;
     }
 
     /* if other is another dict view, and it is bigger than self,
@@ -4837,12 +5821,15 @@ _PyDictView_Intersect(PyObject* self, PyObject *other)
        1. self is a dictview
        2. if other is a dictview then it is smaller than self */
     result = PySet_New(NULL);
-    if (result == NULL)
+    if (result == NULL) {
+        dict_metrics[131].total_time += elapsed(start);
         return NULL;
+    }
 
     it = PyObject_GetIter(other);
     if (it == NULL) {
         Py_DECREF(result);
+        dict_metrics[131].total_time += elapsed(start);
         return NULL;
     }
 
@@ -4871,33 +5858,44 @@ _PyDictView_Intersect(PyObject* self, PyObject *other)
         Py_DECREF(result);
         return NULL;
     }
+    dict_metrics[131].total_time += elapsed(start);
     return result;
 
 error:
     Py_DECREF(it);
     Py_DECREF(result);
     Py_DECREF(key);
+    dict_metrics[131].total_time += elapsed(start);
     return NULL;
 }
 
 static PyObject*
 dictviews_or(PyObject* self, PyObject *other)
 {
+    dict_metrics[132].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *result = dictviews_to_set(self);
     if (result == NULL) {
+        dict_metrics[132].total_time += elapsed(start);
         return NULL;
     }
 
     if (_PySet_Update(result, other) < 0) {
         Py_DECREF(result);
+        dict_metrics[132].total_time += elapsed(start);
         return NULL;
     }
+    dict_metrics[132].total_time += elapsed(start);
     return result;
 }
 
 static PyObject *
 dictitems_xor(PyObject *self, PyObject *other)
 {
+    dict_metrics[133].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(PyDictItems_Check(self));
     assert(PyDictItems_Check(other));
     PyObject *d1 = (PyObject *)((_PyDictViewObject *)self)->dv_dict;
@@ -4905,11 +5903,13 @@ dictitems_xor(PyObject *self, PyObject *other)
 
     PyObject *temp_dict = PyDict_Copy(d1);
     if (temp_dict == NULL) {
+    dict_metrics[133].total_time += elapsed(start);
         return NULL;
     }
     PyObject *result_set = PySet_New(NULL);
     if (result_set == NULL) {
         Py_CLEAR(temp_dict);
+    dict_metrics[133].total_time += elapsed(start);
         return NULL;
     }
 
@@ -4970,6 +5970,7 @@ dictitems_xor(PyObject *self, PyObject *other)
     }
     Py_DECREF(temp_dict);
     Py_DECREF(remaining_pairs);
+    dict_metrics[133].total_time += elapsed(start);
     return result_set;
 
 error:
@@ -4978,17 +5979,24 @@ error:
     Py_XDECREF(key);
     Py_XDECREF(val1);
     Py_XDECREF(val2);
+    dict_metrics[133].total_time += elapsed(start);
     return NULL;
 }
 
 static PyObject*
 dictviews_xor(PyObject* self, PyObject *other)
 {
+    dict_metrics[134].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (PyDictItems_Check(self) && PyDictItems_Check(other)) {
-        return dictitems_xor(self, other);
+        PyObject *ret = dictitems_xor(self, other);
+        dict_metrics[134].total_time += elapsed(start);
+        return ret;
     }
     PyObject *result = dictviews_to_set(self);
     if (result == NULL) {
+        dict_metrics[134].total_time += elapsed(start);
         return NULL;
     }
 
@@ -4996,10 +6004,12 @@ dictviews_xor(PyObject* self, PyObject *other)
             result, &_Py_ID(symmetric_difference_update), other);
     if (tmp == NULL) {
         Py_DECREF(result);
+        dict_metrics[134].total_time += elapsed(start);
         return NULL;
     }
 
     Py_DECREF(tmp);
+    dict_metrics[134].total_time += elapsed(start);
     return result;
 }
 
@@ -5025,14 +6035,21 @@ static PyNumberMethods dictviews_as_number = {
 static PyObject*
 dictviews_isdisjoint(PyObject *self, PyObject *other)
 {
+    dict_metrics[135].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *it;
     PyObject *item = NULL;
 
     if (self == other) {
-        if (dictview_len((_PyDictViewObject *)self) == 0)
+        if (dictview_len((_PyDictViewObject *)self) == 0) {
+            dict_metrics[135].total_time += elapsed(start);
             Py_RETURN_TRUE;
-        else
+        }
+        else {
+            dict_metrics[135].total_time += elapsed(start);
             Py_RETURN_FALSE;
+        }
     }
 
     /* Iterate over the shorter object (only if other is a set,
@@ -5040,8 +6057,10 @@ dictviews_isdisjoint(PyObject *self, PyObject *other)
     if (PyAnySet_Check(other) || PyDictViewSet_Check(other)) {
         Py_ssize_t len_self = dictview_len((_PyDictViewObject *)self);
         Py_ssize_t len_other = PyObject_Size(other);
-        if (len_other == -1)
+        if (len_other == -1) {
+            dict_metrics[135].total_time += elapsed(start);
             return NULL;
+        }
 
         if ((len_other > len_self)) {
             PyObject *tmp = other;
@@ -5051,25 +6070,32 @@ dictviews_isdisjoint(PyObject *self, PyObject *other)
     }
 
     it = PyObject_GetIter(other);
-    if (it == NULL)
+    if (it == NULL) {
+        dict_metrics[135].total_time += elapsed(start);
         return NULL;
+    }
 
     while ((item = PyIter_Next(it)) != NULL) {
         int contains = PySequence_Contains(self, item);
         Py_DECREF(item);
         if (contains == -1) {
             Py_DECREF(it);
+            dict_metrics[135].total_time += elapsed(start);
             return NULL;
         }
 
         if (contains) {
             Py_DECREF(it);
+            dict_metrics[135].total_time += elapsed(start);
             Py_RETURN_FALSE;
         }
     }
     Py_DECREF(it);
-    if (PyErr_Occurred())
+    if (PyErr_Occurred()) {
+        dict_metrics[135].total_time += elapsed(start);
         return NULL; /* PyIter_Next raised an exception. */
+    }
+    dict_metrics[135].total_time += elapsed(start);
     Py_RETURN_TRUE;
 }
 
@@ -5125,16 +6151,27 @@ PyTypeObject PyDictKeys_Type = {
 static PyObject *
 dictkeys_new(PyObject *dict, PyObject *Py_UNUSED(ignored))
 {
-    return _PyDictView_New(dict, &PyDictKeys_Type);
+    dict_metrics[136].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    PyObject *ret = _PyDictView_New(dict, &PyDictKeys_Type);
+    dict_metrics[136].total_time += elapsed(start);
+    return ret;
 }
 
 static PyObject *
 dictkeys_reversed(_PyDictViewObject *dv, PyObject *Py_UNUSED(ignored))
 {
+    dict_metrics[137].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (dv->dv_dict == NULL) {
+        dict_metrics[137].total_time += elapsed(start);
         Py_RETURN_NONE;
     }
-    return dictiter_new(dv->dv_dict, &PyDictRevIterKey_Type);
+    PyObject *ret = dictiter_new(dv->dv_dict, &PyDictRevIterKey_Type);
+    dict_metrics[137].total_time += elapsed(start);
+    return ret;
 }
 
 /*** dict_items ***/
@@ -5142,32 +6179,49 @@ dictkeys_reversed(_PyDictViewObject *dv, PyObject *Py_UNUSED(ignored))
 static PyObject *
 dictitems_iter(_PyDictViewObject *dv)
 {
+    dict_metrics[138].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (dv->dv_dict == NULL) {
+        dict_metrics[138].total_time += elapsed(start);
         Py_RETURN_NONE;
     }
-    return dictiter_new(dv->dv_dict, &PyDictIterItem_Type);
+    PyObject *ret = dictiter_new(dv->dv_dict, &PyDictIterItem_Type);
+    dict_metrics[138].total_time += elapsed(start);
+    return ret;
 }
 
 static int
 dictitems_contains(_PyDictViewObject *dv, PyObject *obj)
 {
+    dict_metrics[130].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     int result;
     PyObject *key, *value, *found;
-    if (dv->dv_dict == NULL)
+    if (dv->dv_dict == NULL) {
+        dict_metrics[130].total_time += elapsed(start);
         return 0;
-    if (!PyTuple_Check(obj) || PyTuple_GET_SIZE(obj) != 2)
+    }
+    if (!PyTuple_Check(obj) || PyTuple_GET_SIZE(obj) != 2) {
+        dict_metrics[130].total_time += elapsed(start);
         return 0;
+    }
     key = PyTuple_GET_ITEM(obj, 0);
     value = PyTuple_GET_ITEM(obj, 1);
     found = PyDict_GetItemWithError((PyObject *)dv->dv_dict, key);
     if (found == NULL) {
-        if (PyErr_Occurred())
+        if (PyErr_Occurred()) {
+            dict_metrics[130].total_time += elapsed(start);
             return -1;
+        }
+        dict_metrics[130].total_time += elapsed(start);
         return 0;
     }
     Py_INCREF(found);
     result = PyObject_RichCompareBool(found, value, Py_EQ);
     Py_DECREF(found);
+    dict_metrics[130].total_time += elapsed(start);
     return result;
 }
 
@@ -5231,16 +6285,27 @@ PyTypeObject PyDictItems_Type = {
 static PyObject *
 dictitems_new(PyObject *dict, PyObject *Py_UNUSED(ignored))
 {
-    return _PyDictView_New(dict, &PyDictItems_Type);
+    dict_metrics[139].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    PyObject *ret = _PyDictView_New(dict, &PyDictItems_Type);
+    dict_metrics[139].total_time += elapsed(start);
+    return ret;
 }
 
 static PyObject *
 dictitems_reversed(_PyDictViewObject *dv, PyObject *Py_UNUSED(ignored))
 {
+    dict_metrics[140].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (dv->dv_dict == NULL) {
+        dict_metrics[140].total_time += elapsed(start);
         Py_RETURN_NONE;
     }
-    return dictiter_new(dv->dv_dict, &PyDictRevIterItem_Type);
+    PyObject *ret = dictiter_new(dv->dv_dict, &PyDictRevIterItem_Type);
+    dict_metrics[140].total_time += elapsed(start);
+    return ret;
 }
 
 /*** dict_values ***/
@@ -5248,10 +6313,16 @@ dictitems_reversed(_PyDictViewObject *dv, PyObject *Py_UNUSED(ignored))
 static PyObject *
 dictvalues_iter(_PyDictViewObject *dv)
 {
+    dict_metrics[141].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (dv->dv_dict == NULL) {
+        dict_metrics[141].total_time += elapsed(start);
         Py_RETURN_NONE;
     }
-    return dictiter_new(dv->dv_dict, &PyDictIterValue_Type);
+    PyObject *ret = dictiter_new(dv->dv_dict, &PyDictIterValue_Type);
+    dict_metrics[141].total_time += elapsed(start);
+    return ret;
 }
 
 static PySequenceMethods dictvalues_as_sequence = {
@@ -5312,16 +6383,27 @@ PyTypeObject PyDictValues_Type = {
 static PyObject *
 dictvalues_new(PyObject *dict, PyObject *Py_UNUSED(ignored))
 {
-    return _PyDictView_New(dict, &PyDictValues_Type);
+    dict_metrics[142].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
+    PyObject *ret = _PyDictView_New(dict, &PyDictValues_Type);
+    dict_metrics[142].total_time += elapsed(start);
+    return ret;
 }
 
 static PyObject *
 dictvalues_reversed(_PyDictViewObject *dv, PyObject *Py_UNUSED(ignored))
 {
+    dict_metrics[143].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (dv->dv_dict == NULL) {
+        dict_metrics[143].total_time += elapsed(start);
         Py_RETURN_NONE;
     }
-    return dictiter_new(dv->dv_dict, &PyDictRevIterValue_Type);
+    PyObject *ret = dictiter_new(dv->dv_dict, &PyDictRevIterValue_Type);
+    dict_metrics[143].total_time += elapsed(start);
+    return ret;
 }
 
 
@@ -5330,6 +6412,9 @@ dictvalues_reversed(_PyDictViewObject *dv, PyObject *Py_UNUSED(ignored))
 PyDictKeysObject *
 _PyDict_NewKeysForClass(void)
 {
+    dict_metrics[144].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictKeysObject *keys = new_keys_object(NEXT_LOG2_SHARED_KEYS_MAX_SIZE, 1);
     if (keys == NULL) {
         PyErr_Clear();
@@ -5340,6 +6425,7 @@ _PyDict_NewKeysForClass(void)
         keys->dk_usable = SHARED_KEYS_MAX_SIZE;
         keys->dk_kind = DICT_KEYS_SPLIT;
     }
+    dict_metrics[144].total_time += elapsed(start);
     return keys;
 }
 
@@ -5348,6 +6434,9 @@ _PyDict_NewKeysForClass(void)
 static int
 init_inline_values(PyObject *obj, PyTypeObject *tp)
 {
+    dict_metrics[145].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(tp->tp_flags & Py_TPFLAGS_HEAPTYPE);
     // assert(type->tp_dictoffset > 0);  -- TO DO Update this assert.
     assert(tp->tp_flags & Py_TPFLAGS_MANAGED_DICT);
@@ -5361,6 +6450,7 @@ init_inline_values(PyObject *obj, PyTypeObject *tp)
     PyDictValues *values = new_values(size);
     if (values == NULL) {
         PyErr_NoMemory();
+        dict_metrics[145].total_time += elapsed(start);
         return -1;
     }
     assert(((uint8_t *)values)[-1] >= size+2);
@@ -5369,19 +6459,26 @@ init_inline_values(PyObject *obj, PyTypeObject *tp)
         values->values[i] = NULL;
     }
     *_PyObject_ValuesPointer(obj) = values;
+    dict_metrics[145].total_time += elapsed(start);
     return 0;
 }
 
 int
 _PyObject_InitializeDict(PyObject *obj)
 {
+    dict_metrics[146].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyTypeObject *tp = Py_TYPE(obj);
     if (tp->tp_dictoffset == 0) {
+        dict_metrics[146].total_time += elapsed(start);
         return 0;
     }
     if (tp->tp_flags & Py_TPFLAGS_MANAGED_DICT) {
         OBJECT_STAT_INC(new_values);
-        return init_inline_values(obj, tp);
+        int ret = init_inline_values(obj, tp);
+        dict_metrics[146].total_time += elapsed(start);
+        return ret;
     }
     PyObject *dict;
     if (_PyType_HasFeature(tp, Py_TPFLAGS_HEAPTYPE) && CACHED_KEYS(tp)) {
@@ -5392,16 +6489,21 @@ _PyObject_InitializeDict(PyObject *obj)
         dict = PyDict_New();
     }
     if (dict == NULL) {
+        dict_metrics[146].total_time += elapsed(start);
         return -1;
     }
     PyObject **dictptr = _PyObject_DictPointer(obj);
     *dictptr = dict;
+    dict_metrics[146].total_time += elapsed(start);
     return 0;
 }
 
 static PyObject *
 make_dict_from_instance_attributes(PyDictKeysObject *keys, PyDictValues *values)
 {
+    dict_metrics[147].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     dictkeys_incref(keys);
     Py_ssize_t used = 0;
     Py_ssize_t track = 0;
@@ -5416,22 +6518,31 @@ make_dict_from_instance_attributes(PyDictKeysObject *keys, PyDictValues *values)
     if (track && res) {
         _PyObject_GC_TRACK(res);
     }
+    dict_metrics[147].total_time += elapsed(start);
     return res;
 }
 
 PyObject *
 _PyObject_MakeDictFromInstanceAttributes(PyObject *obj, PyDictValues *values)
 {
+    dict_metrics[148].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(Py_TYPE(obj)->tp_flags & Py_TPFLAGS_MANAGED_DICT);
     PyDictKeysObject *keys = CACHED_KEYS(Py_TYPE(obj));
     OBJECT_STAT_INC(dict_materialized_on_request);
-    return make_dict_from_instance_attributes(keys, values);
+    PyObject *ret = make_dict_from_instance_attributes(keys, values);
+    dict_metrics[148].total_time += elapsed(start);
+    return ret;
 }
 
 int
 _PyObject_StoreInstanceAttribute(PyObject *obj, PyDictValues *values,
                               PyObject *name, PyObject *value)
 {
+    dict_metrics[149].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyDictKeysObject *keys = CACHED_KEYS(Py_TYPE(obj));
     assert(keys != NULL);
     assert(values != NULL);
@@ -5456,15 +6567,20 @@ _PyObject_StoreInstanceAttribute(PyObject *obj, PyDictValues *values,
 #endif
         PyObject *dict = make_dict_from_instance_attributes(keys, values);
         if (dict == NULL) {
+            dict_metrics[149].total_time += elapsed(start);
             return -1;
         }
         *_PyObject_ValuesPointer(obj) = NULL;
         *_PyObject_ManagedDictPointer(obj) = dict;
         if (value == NULL) {
-            return PyDict_DelItem(dict, name);
+            int ret = PyDict_DelItem(dict, name);
+            dict_metrics[149].total_time += elapsed(start);
+            return ret;
         }
         else {
-            return PyDict_SetItem(dict, name, value);
+            int ret = PyDict_SetItem(dict, name, value);
+            dict_metrics[149].total_time += elapsed(start);
+            return ret;
         }
     }
     PyObject *old_value = values->values[ix];
@@ -5475,6 +6591,7 @@ _PyObject_StoreInstanceAttribute(PyObject *obj, PyDictValues *values,
             PyErr_Format(PyExc_AttributeError,
                          "'%.100s' object has no attribute '%U'",
                          Py_TYPE(obj)->tp_name, name);
+            dict_metrics[149].total_time += elapsed(start);
             return -1;
         }
         _PyDictValues_AddToInsertionOrder(values, ix);
@@ -5485,6 +6602,7 @@ _PyObject_StoreInstanceAttribute(PyObject *obj, PyDictValues *values,
         }
         Py_DECREF(old_value);
     }
+    dict_metrics[149].total_time += elapsed(start);
     return 0;
 }
 
@@ -5492,23 +6610,33 @@ PyObject *
 _PyObject_GetInstanceAttribute(PyObject *obj, PyDictValues *values,
                               PyObject *name)
 {
+    dict_metrics[150].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     assert(PyUnicode_CheckExact(name));
     PyDictKeysObject *keys = CACHED_KEYS(Py_TYPE(obj));
     assert(keys != NULL);
     Py_ssize_t ix = _PyDictKeys_StringLookup(keys, name);
     if (ix == DKIX_EMPTY) {
+        dict_metrics[150].total_time += elapsed(start);
         return NULL;
     }
     PyObject *value = values->values[ix];
     Py_XINCREF(value);
+    dict_metrics[150].total_time += elapsed(start);
+    dict_metrics[150].extra_1++;
     return value;
 }
 
 int
 _PyObject_IsInstanceDictEmpty(PyObject *obj)
 {
+    dict_metrics[151].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyTypeObject *tp = Py_TYPE(obj);
     if (tp->tp_dictoffset == 0) {
+        dict_metrics[151].total_time += elapsed(start);
         return 1;
     }
     PyObject **dictptr;
@@ -5518,9 +6646,11 @@ _PyObject_IsInstanceDictEmpty(PyObject *obj)
             PyDictKeysObject *keys = CACHED_KEYS(tp);
             for (Py_ssize_t i = 0; i < keys->dk_nentries; i++) {
                 if (values->values[i] != NULL) {
+                    dict_metrics[151].total_time += elapsed(start);
                     return 0;
                 }
             }
+            dict_metrics[151].total_time += elapsed(start);
             return 1;
         }
         dictptr = _PyObject_ManagedDictPointer(obj);
@@ -5530,8 +6660,10 @@ _PyObject_IsInstanceDictEmpty(PyObject *obj)
     }
     PyObject *dict = *dictptr;
     if (dict == NULL) {
+        dict_metrics[151].total_time += elapsed(start);
         return 1;
     }
+    dict_metrics[151].total_time += elapsed(start);
     return ((PyDictObject *)dict)->ma_used == 0;
 }
 
@@ -5539,42 +6671,56 @@ _PyObject_IsInstanceDictEmpty(PyObject *obj)
 int
 _PyObject_VisitInstanceAttributes(PyObject *self, visitproc visit, void *arg)
 {
+    dict_metrics[152].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyTypeObject *tp = Py_TYPE(self);
     assert(Py_TYPE(self)->tp_flags & Py_TPFLAGS_MANAGED_DICT);
     PyDictValues **values_ptr = _PyObject_ValuesPointer(self);
     if (*values_ptr == NULL) {
+        dict_metrics[152].total_time += elapsed(start);
         return 0;
     }
     PyDictKeysObject *keys = CACHED_KEYS(tp);
     for (Py_ssize_t i = 0; i < keys->dk_nentries; i++) {
         Py_VISIT((*values_ptr)->values[i]);
     }
+    dict_metrics[152].total_time += elapsed(start);
     return 0;
 }
 
 void
 _PyObject_ClearInstanceAttributes(PyObject *self)
 {
+    dict_metrics[153].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyTypeObject *tp = Py_TYPE(self);
     assert(Py_TYPE(self)->tp_flags & Py_TPFLAGS_MANAGED_DICT);
     PyDictValues **values_ptr = _PyObject_ValuesPointer(self);
     if (*values_ptr == NULL) {
+        dict_metrics[153].total_time += elapsed(start);
         return;
     }
     PyDictKeysObject *keys = CACHED_KEYS(tp);
     for (Py_ssize_t i = 0; i < keys->dk_nentries; i++) {
         Py_CLEAR((*values_ptr)->values[i]);
     }
+    dict_metrics[153].total_time += elapsed(start);
 }
 
 void
 _PyObject_FreeInstanceAttributes(PyObject *self)
 {
+    dict_metrics[154].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyTypeObject *tp = Py_TYPE(self);
     assert(Py_TYPE(self)->tp_flags & Py_TPFLAGS_MANAGED_DICT);
     PyDictValues **values_ptr = _PyObject_ValuesPointer(self);
     PyDictValues *values = *values_ptr;
     if (values == NULL) {
+        dict_metrics[154].total_time += elapsed(start);
         return;
     }
     *values_ptr = NULL;
@@ -5583,11 +6729,15 @@ _PyObject_FreeInstanceAttributes(PyObject *self)
         Py_XDECREF(values->values[i]);
     }
     free_values(values);
+    dict_metrics[154].total_time += elapsed(start);
 }
 
 PyObject *
 PyObject_GenericGetDict(PyObject *obj, void *context)
 {
+    dict_metrics[155].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *dict;
     PyTypeObject *tp = Py_TYPE(obj);
     if (_PyType_HasFeature(tp, Py_TPFLAGS_MANAGED_DICT)) {
@@ -5613,6 +6763,7 @@ PyObject_GenericGetDict(PyObject *obj, void *context)
         if (dictptr == NULL) {
             PyErr_SetString(PyExc_AttributeError,
                             "This object has no __dict__");
+            dict_metrics[155].total_time += elapsed(start);
             return NULL;
         }
         dict = *dictptr;
@@ -5628,6 +6779,8 @@ PyObject_GenericGetDict(PyObject *obj, void *context)
         }
     }
     Py_XINCREF(dict);
+    dict_metrics[155].total_time += elapsed(start);
+    dict_metrics[155].extra_1 += 1;
     return dict;
 }
 
@@ -5635,6 +6788,9 @@ int
 _PyObjectDict_SetItem(PyTypeObject *tp, PyObject **dictptr,
                       PyObject *key, PyObject *value)
 {
+    dict_metrics[156].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     PyObject *dict;
     int res;
     PyDictKeysObject *cached;
@@ -5646,8 +6802,10 @@ _PyObjectDict_SetItem(PyTypeObject *tp, PyObject **dictptr,
         if (dict == NULL) {
             dictkeys_incref(cached);
             dict = new_dict_with_shared_keys(cached);
-            if (dict == NULL)
+            if (dict == NULL) {
+                dict_metrics[156].total_time += elapsed(start);
                 return -1;
+            }
             *dictptr = dict;
         }
         if (value == NULL) {
@@ -5660,8 +6818,10 @@ _PyObjectDict_SetItem(PyTypeObject *tp, PyObject **dictptr,
         dict = *dictptr;
         if (dict == NULL) {
             dict = PyDict_New();
-            if (dict == NULL)
+            if (dict == NULL) {
+                dict_metrics[156].total_time += elapsed(start);
                 return -1;
+            }
             *dictptr = dict;
         }
         if (value == NULL) {
@@ -5671,26 +6831,37 @@ _PyObjectDict_SetItem(PyTypeObject *tp, PyObject **dictptr,
         }
     }
     ASSERT_CONSISTENT(dict);
+    dict_metrics[156].total_time += elapsed(start);
     return res;
 }
 
 void
 _PyDictKeys_DecRef(PyDictKeysObject *keys)
 {
+    dict_metrics[157].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     dictkeys_decref(keys);
+    dict_metrics[157].total_time += elapsed(start);
 }
 
 static uint32_t next_dict_keys_version = 2;
 
 uint32_t _PyDictKeys_GetVersionForCurrentState(PyDictKeysObject *dictkeys)
 {
+    dict_metrics[158].usages++;
+    struct timespec start;
+    timespec_get(&start, TIME_UTC);
     if (dictkeys->dk_version != 0) {
+        dict_metrics[158].total_time += elapsed(start);
         return dictkeys->dk_version;
     }
     if (next_dict_keys_version == 0) {
+        dict_metrics[158].total_time += elapsed(start);
         return 0;
     }
     uint32_t v = next_dict_keys_version++;
     dictkeys->dk_version = v;
+    dict_metrics[158].total_time += elapsed(start);
     return v;
 }

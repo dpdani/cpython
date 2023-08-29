@@ -7,6 +7,7 @@
 #include "pycore_pathconfig.h"    // _PyPathConfig_ComputeSysPath0()
 #include "pycore_pylifecycle.h"   // _Py_PreInitializeFromPyArgv()
 #include "pycore_pystate.h"       // _PyInterpreterState_GET()
+#include "dictmetrics.h"
 
 /* Includes for exit_sigint() */
 #include <stdio.h>                // perror()
@@ -707,7 +708,9 @@ pymain_main(_PyArgv *args)
         pymain_exit_error(status);
     }
 
-    return Py_RunMain();
+    int ret = Py_RunMain();
+    print_dict_metrics();
+    return ret;
 }
 
 
