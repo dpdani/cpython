@@ -7,6 +7,16 @@ All the dictionary routines in [dictobject.c](./Objects/dictobject.c) are modifi
 to keep track of the number of calls and the total running time for each method
 inside the `dict_metrics` global table (see [dictmetrics.c](./Objects/dictmetrics.c)).
 
+The modified interpreter was used to run the [pyperformance benchmark suite](https://github.com/python/pyperformance).
+The csv reports generated were summarized with the [analysis.ipynb](./analysis.ipynb) script and are attached here in
+[dict-metrics_combined.csv](./dict-metrics_combined.csv).
+The separate reports, generated per interpreter invocation, are not included here.
+
+Note that the results of the benchmarks executed are not relevant here, and thus not included.
+
+
+## Extras
+
 Several methods also include extra information:
 
 | method                           | extra 1               | extra 2           | extra 3                 |
